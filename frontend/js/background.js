@@ -1,714 +1,423 @@
 /* global chrome */
 /* global psl */
 
-importScripts('heuristic.js'); // Import heuristic engine
+importScripts('heuristic.js'); // Engine V2: computeScore
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Logger — chỉ hoạt động khi chạy ở chế độ development
+// Logger
 // ─────────────────────────────────────────────────────────────────────────────
 const IS_DEV = !('update_url' in chrome.runtime.getManifest());
 const logger = {
-  info:  (...a) => IS_DEV && console.info('[AntiScam]', ...a),
-  warn:  (...a) => IS_DEV && console.warn('[AntiScam]', ...a),
+  info: (...a) => IS_DEV && console.info('[AntiScam]', ...a),
+  warn: (...a) => IS_DEV && console.warn('[AntiScam]', ...a),
   error: (...a) => IS_DEV && console.error('[AntiScam]', ...a),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  State Machine & Hằng số
+// State Machine & Hằng số
 // ─────────────────────────────────────────────────────────────────────────────
-const ANALYSIS_STATUS = Object.freeze({
-  IDLE:      'IDLE',
-  ANALYZING: 'ANALYZING',
-  SUCCESS:   'SUCCESS',
-  FAILED:    'FAILED',
-  OFFLINE:   'OFFLINE',
-});
-
-const BLACKLIST_TTL_MS    = 60 * 60 * 1000;  // 1 giờ
-const OPENPHISH_TTL_MS    = 15 * 60 * 1000;  // 15 phút
-const CLASSIFIER_TTL_MS   = 5  * 60 * 1000;  // 5 phút
-const RESULT_CACHE_TTL_MS = 10 * 60 * 1000;  // 10 phút cache kết quả theo URL
-const FETCH_TIMEOUT_MS    = 10_000;
-const MAX_RETRIES         = 3;
-
+const ANALYSIS_STATUS = Object.freeze({ IDLE:'IDLE', ANALYZING:'ANALYZING', SUCCESS:'SUCCESS', FAILED:'FAILED', OFFLINE:'OFFLINE' });
+const BLACKLIST_TTL_MS = 60*60*1000, OPENPHISH_TTL_MS = 15*60*1000, CLASSIFIER_TTL_MS = 5*60*1000;
+const RESULT_CACHE_TTL_MS = 10*60*1000, FETCH_TIMEOUT_MS = 10_000, MAX_RETRIES = 3;
 const API_BASE = 'https://api.chongluadao.vn';
 const OPENPHISH_URL = 'https://raw.githubusercontent.com/openphish/public_feed/refs/heads/main/feed.txt';
-
-const PORT_REDIRECT  = 'REDIRECT_PORT_NAME';
-const PORT_CLOSE_TAB = 'CLOSE_TAB_PORT_NAME';
+const PORT_REDIRECT = 'REDIRECT_PORT_NAME', PORT_CLOSE_TAB = 'CLOSE_TAB_PORT_NAME';
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Circuit Breaker Pattern
+// Circuit Breaker
 // ─────────────────────────────────────────────────────────────────────────────
-const circuitBreaker = {
-  antiScamApi: { failures: 0, openUntil: 0 },
-  openPhish:   { failures: 0, openUntil: 0 },
-};
-const CB_THRESHOLD = 3;
-const CB_TIMEOUT_MS = 30_000; // Ngắt 30s
+const circuitBreaker = { antiScamApi:{failures:0,openUntil:0}, openPhish:{failures:0,openUntil:0} };
+const CB_THRESHOLD = 3, CB_TIMEOUT_MS = 30_000;
+const checkCB = (s) => { const cb = circuitBreaker[s]; if (Date.now() < cb.openUntil) { logger.warn(`CB OPEN ${s}`); return false; } return true; };
+const recFail = (s) => { const cb = circuitBreaker[s]; cb.failures++; if (cb.failures >= CB_THRESHOLD) { cb.openUntil = Date.now() + CB_TIMEOUT_MS; logger.error(`CB TRIPPED ${s}`); } };
+const recOK = (s) => { circuitBreaker[s].failures = 0; };
 
-const checkCircuitBreaker = (source) => {
-  const cb = circuitBreaker[source];
-  if (Date.now() < cb.openUntil) {
-    logger.warn(`Circuit breaker OPEN cho ${source}, bỏ qua request.`);
-    return false;
-  }
-  return true;
-};
-
-const recordFailure = (source) => {
-  const cb = circuitBreaker[source];
-  cb.failures++;
-  if (cb.failures >= CB_THRESHOLD) {
-    cb.openUntil = Date.now() + CB_TIMEOUT_MS;
-    logger.error(`Circuit breaker TRIPPED cho ${source}. Ngừng gọi trong 30s.`);
-  }
-};
-
-const recordSuccess = (source) => {
-  circuitBreaker[source].failures = 0;
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Utility: fetch với timeout + retry + exponential backoff + circuit breaker
-// ─────────────────────────────────────────────────────────────────────────────
-const fetchWithRetry = async (url, source, isJson = true, retries = MAX_RETRIES) => {
-  if (!checkCircuitBreaker(source)) return null;
-
-  for (let attempt = 0; attempt < retries; attempt++) {
+const fetchWithRetry = async (u, source, isJson=true, retries=MAX_RETRIES) => {
+  if (!checkCB(source)) return null;
+  for (let attempt=0; attempt<retries; attempt++) {
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-      const response = await fetch(url, { signal: controller.signal });
-      clearTimeout(timer);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      
-      const data = isJson ? await response.json() : await response.text();
-      recordSuccess(source);
-      logger.info(`fetchWithRetry OK: ${url}`);
-      return data;
+      const ctrl = new AbortController(); const t = setTimeout(()=>ctrl.abort(), FETCH_TIMEOUT_MS);
+      const res = await fetch(u, { signal: ctrl.signal }); clearTimeout(t);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = isJson ? await res.json() : await res.text();
+      recOK(source); return data;
     } catch (err) {
-      logger.warn(`fetchWithRetry attempt ${attempt + 1}/${retries} failed cho ${url}: ${err.message}`);
-      if (attempt < retries - 1) {
-        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
-      }
+      logger.warn(`fetch ${attempt+1}/${retries} fail ${u}: ${err.message}`);
+      if (attempt < retries-1) await new Promise(r=>setTimeout(r, 1000*Math.pow(2,attempt)));
     }
   }
-  recordFailure(source);
-  return null;
+  recFail(source); return null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Storage helpers
+// Storage helpers
 // ─────────────────────────────────────────────────────────────────────────────
-const getTabState = async (tabId) => {
-  try {
-    const key = `tab_${tabId}`;
-    const data = await chrome.storage.session.get(key);
-    return data[key] || null;
-  } catch (err) {
-    logger.error('getTabState failed:', err);
-    return null;
-  }
-};
+const getTabState = async (tabId) => { try { const d = await chrome.storage.session.get(`tab_${tabId}`); return d[`tab_${tabId}`] || null; } catch(e){ return null; } };
+const setTabState = async (tabId, state) => { try { await chrome.storage.session.set({ [`tab_${tabId}`]: { ...state, updatedAt: Date.now() } }); } catch(e){ logger.error('setTabState', e); } };
+const removeTabState = async (tabId) => { try { await chrome.storage.session.remove(`tab_${tabId}`); } catch(e){} };
 
-const setTabState = async (tabId, state) => {
-  try {
-    const key = `tab_${tabId}`;
-    await chrome.storage.session.set({ [key]: { ...state, updatedAt: Date.now() } });
-  } catch (err) {
-    logger.error('setTabState failed:', err);
-  }
-};
-
-const removeTabState = async (tabId) => {
-  try {
-    await chrome.storage.session.remove(`tab_${tabId}`);
-  } catch (err) {
-    logger.warn('removeTabState failed:', err);
-  }
-};
-
-// URL Cache cho classify() để tránh phân tích lại cùng URL nhiều lần
 const getUrlCache = async (url) => {
   try {
-    // Hash đơn giản
-    let hash = 0;
-    for (let i = 0; i < url.length; i++) {
-      hash = ((hash << 5) - hash) + url.charCodeAt(i);
-      hash |= 0;
-    }
-    const key = `cache_${hash}`;
-    const data = await chrome.storage.session.get(key);
-    const item = data[key];
-    if (item && Date.now() - item.timestamp < RESULT_CACHE_TTL_MS) {
-      return item;
-    }
-  } catch (e) { }
+    let h=0; for (let i=0;i<url.length;i++){ h=((h<<5)-h)+url.charCodeAt(i); h|=0; }
+    const d = await chrome.storage.session.get(`cache_${h}`);
+    const it = d[`cache_${h}`]; if (it && Date.now()-it.timestamp < RESULT_CACHE_TTL_MS) return it;
+  } catch(e){}
   return null;
 };
-
 const setUrlCache = async (url, data) => {
   try {
-    let hash = 0;
-    for (let i = 0; i < url.length; i++) {
-      hash = ((hash << 5) - hash) + url.charCodeAt(i);
-      hash |= 0;
-    }
-    const key = `cache_${hash}`;
-    await chrome.storage.session.set({ [key]: { ...data, timestamp: Date.now() } });
-  } catch (e) {}
+    let h=0; for (let i=0;i<url.length;i++){ h=((h<<5)-h)+url.charCodeAt(i); h|=0; }
+    await chrome.storage.session.set({ [`cache_${h}`]: { ...data, timestamp: Date.now() } });
+  } catch(e){}
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  RDAP Domain Age Intelligence
+// RDAP Domain Age
 // ─────────────────────────────────────────────────────────────────────────────
 const fetchDomainAge = async (domain) => {
   try {
-    let baseDomain = domain;
-    try {
-      if (typeof psl !== 'undefined') {
-        baseDomain = psl.parse(domain).domain || domain;
-      }
-    } catch (e) {}
-
-    const key = `age_${baseDomain}`;
-    const cachedAge = await chrome.storage.session.get(key);
-    if (cachedAge && cachedAge[key] !== undefined) {
-      return cachedAge[key];
-    }
-    
-    // Timeout 3s để không chặn quá trình quét
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
-    
-    const response = await fetch(`https://rdap.org/domain/${baseDomain}`, { signal: controller.signal });
-    clearTimeout(timer);
-    
-    if (!response.ok) return -1;
-    
-    const data = await response.json();
+    let base = domain;
+    try { if (typeof psl !== 'undefined') base = psl.parse(domain).domain || domain; } catch(e){}
+    const key = `age_${base}`;
+    const cached = await chrome.storage.session.get(key);
+    if (cached && cached[key] !== undefined) return cached[key];
+    const ctrl = new AbortController(); const t = setTimeout(()=>ctrl.abort(), 3000);
+    const res = await fetch(`https://rdap.org/domain/${base}`, { signal: ctrl.signal }); clearTimeout(t);
+    if (!res.ok) return -1;
+    const data = await res.json();
     if (data && data.events) {
-      const regEvent = data.events.find(e => e.eventAction === 'registration');
-      if (regEvent && regEvent.eventDate) {
-        const regDate = new Date(regEvent.eventDate);
-        const ageDays = (Date.now() - regDate.getTime()) / (1000 * 60 * 60 * 24);
-        
-        await chrome.storage.session.set({ [key]: ageDays });
-        return ageDays;
-      }
+      const reg = data.events.find(e => e.eventAction === 'registration');
+      if (reg && reg.eventDate) { const age = (Date.now() - new Date(reg.eventDate).getTime())/(1000*60*60*24); await chrome.storage.session.set({ [key]: age }); return age; }
     }
-  } catch (err) {
-    logger.warn(`fetchDomainAge failed cho ${domain}:`, err.message);
-  }
+  } catch (err) { logger.warn(`fetchDomainAge ${domain}:`, err.message); }
   return -1;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Classifier ML
+// Classifier ML (tín hiệu PHỤ)
 // ─────────────────────────────────────────────────────────────────────────────
 const fetchCLF = async () => {
   try {
-    const { classifierCache, classifierCacheTime } = await chrome.storage.local.get(['classifierCache', 'classifierCacheTime']);
-    if (classifierCache && classifierCacheTime && (Date.now() - classifierCacheTime < CLASSIFIER_TTL_MS)) {
-      return classifierCache;
-    }
+    const { classifierCache, classifierCacheTime } = await chrome.storage.local.get(['classifierCache','classifierCacheTime']);
+    if (classifierCache && classifierCacheTime && Date.now()-classifierCacheTime < CLASSIFIER_TTL_MS) return classifierCache;
     const data = await fetchWithRetry(`${API_BASE}/classifier.json`, 'antiScamApi', true);
-    if (data) {
-      await chrome.storage.local.set({ classifierCache: data, classifierCacheTime: Date.now() });
-      return data;
-    }
+    if (data) { await chrome.storage.local.set({ classifierCache:data, classifierCacheTime:Date.now() }); return data; }
     if (classifierCache) return classifierCache;
-  } catch (err) {
-    logger.error('fetchCLF exception:', err);
-  }
+  } catch(e){ logger.error('fetchCLF', e); }
   return null;
 };
-
-const decisionTree = (root) => {
-  const predictOne = (x) => {
-    let node = root;
-    while (node['type'] == 'split') {
-      const threshold = node['threshold'].split(' <= ');
-      node = x[threshold[0]] <= threshold[1] ? node['left'] : node['right'];
-    }
-    return node['value'][0];
-  };
-  return { predict: (X) => X.map((row) => predictOne(row)) };
-};
-
+const decisionTree = (root) => { const p1=(x)=>{ let n=root; while(n.type==='split'){ const th=n.threshold.split(' <= '); n = x[th[0]]<=th[1] ? n.left : n.right; } return n.value[0]; }; return { predict:(X)=>X.map(p1) }; };
 const randomForest = (clf) => {
   const predict = (X) => {
-    let pred = [clf['estimators'].map((row) => decisionTree(row).predict(X))];
-    pred = pred[0].map((col, i) => pred.map((row) => row[i]));
-    const results = [];
-    for (const p in pred) {
-      let positive = 0, negative = 0;
-      for (const i in pred[p]) {
-        positive += pred[p][i][1];
-        negative += pred[p][i][0];
-      }
-      results.push([positive >= negative, Math.max(positive, negative)]);
-    }
-    return results;
+    let pred = [clf.estimators.map(r=>decisionTree(r).predict(X))];
+    pred = pred[0].map((c,i)=>pred.map(r=>r[i]));
+    const res = [];
+    for (const p in pred) { let pos=0,neg=0; for (const i in pred[p]){ pos+=pred[p][i][1]; neg+=pred[p][i][0]; } res.push([pos>=neg, Math.max(pos,neg)]); }
+    return res;
   };
   return { predict };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Blacklist / Whitelist — Multi-source
+// Blacklist / Whitelist
 // ─────────────────────────────────────────────────────────────────────────────
-let blackListing = []; // Mảng cho wildcard lookup
-let blackListingSet = new Set(); // Set cho exact match O(1)
-let whiteListingSet = new Set();
-let inputBlockLenient = false;
+let blackListing = [], blackListingSet = new Set(), whiteListingSet = new Set(), inputBlockLenient = false;
 
 const loadListsFromCache = async () => {
   try {
     const { blacklist, blacklistTime, whitelist, whitelistTime, openPhishList, openPhishTime } = await chrome.storage.local.get([
-      'blacklist', 'blacklistTime', 'whitelist', 'whitelistTime', 'openPhishList', 'openPhishTime'
-    ]);
-
-    blackListing = [];
-    blackListingSet.clear();
-    whiteListingSet.clear();
-
-    if (blacklist && blacklistTime && (Date.now() - blacklistTime < BLACKLIST_TTL_MS)) {
-      blacklist.forEach(u => blackListing.push(u));
-    }
-    if (openPhishList && openPhishTime && (Date.now() - openPhishTime < OPENPHISH_TTL_MS)) {
-      openPhishList.forEach(u => blackListingSet.add(u));
-    }
-    if (whitelist && whitelistTime && (Date.now() - whitelistTime < BLACKLIST_TTL_MS)) {
-      whitelist.forEach(u => whiteListingSet.add(u));
-    }
-    logger.info(`Cache loaded: ${blackListing.length} CLD, ${blackListingSet.size} OpenPhish, ${whiteListingSet.size} Whitelist`);
-  } catch (err) {
-    logger.error('loadListsFromCache failed:', err);
-  }
+      'blacklist','blacklistTime','whitelist','whitelistTime','openPhishList','openPhishTime']);
+    blackListing = []; blackListingSet.clear(); whiteListingSet.clear();
+    if (blacklist && blacklistTime && Date.now()-blacklistTime < BLACKLIST_TTL_MS) blacklist.forEach(u=>blackListing.push(u));
+    if (openPhishList && openPhishTime && Date.now()-openPhishTime < OPENPHISH_TTL_MS) openPhishList.forEach(u=>blackListingSet.add(u));
+    if (whitelist && whitelistTime && Date.now()-whitelistTime < BLACKLIST_TTL_MS) whitelist.forEach(u=>whiteListingSet.add(u));
+    logger.info(`Cache: ${blackListing.length} CLD, ${blackListingSet.size} OP, ${whiteListingSet.size} WL`);
+  } catch(e){ logger.error('loadListsFromCache', e); }
 };
 
 let startupInProgress = false;
-
 const startup = async () => {
-  if (startupInProgress) return;
-  startupInProgress = true;
-
+  if (startupInProgress) return; startupInProgress = true;
   try {
     await loadListsFromCache();
-
-    // 1. AntiScam Blacklist
     const { blacklistTime } = await chrome.storage.local.get('blacklistTime');
-    if (!blacklistTime || (Date.now() - blacklistTime >= BLACKLIST_TTL_MS)) {
+    if (!blacklistTime || Date.now()-blacklistTime >= BLACKLIST_TTL_MS) {
       const data = await fetchWithRetry(`${API_BASE}/v1/blacklist`, 'antiScamApi', true);
-      if (data && Array.isArray(data)) {
-        const list = data.map(item => item.url).filter(Boolean);
-        await chrome.storage.local.set({ blacklist: list, blacklistTime: Date.now() });
-        blackListing = list;
-        logger.info(`AntiScam Blacklist cập nhật: ${list.length} entries`);
-      }
+      if (data && Array.isArray(data)) { const list = data.map(i=>i.url).filter(Boolean); await chrome.storage.local.set({ blacklist:list, blacklistTime:Date.now() }); blackListing = list; logger.info(`BL: ${list.length}`); }
     }
-
-    // 2. OpenPhish Feed
     const { openPhishTime } = await chrome.storage.local.get('openPhishTime');
-    if (!openPhishTime || (Date.now() - openPhishTime >= OPENPHISH_TTL_MS)) {
+    if (!openPhishTime || Date.now()-openPhishTime >= OPENPHISH_TTL_MS) {
       const text = await fetchWithRetry(OPENPHISH_URL, 'openPhish', false);
-      if (text) {
-        const list = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-        await chrome.storage.local.set({ openPhishList: list, openPhishTime: Date.now() });
-        list.forEach(u => blackListingSet.add(u));
-        logger.info(`OpenPhish Feed cập nhật: ${list.length} entries`);
-      }
+      if (text) { const list = text.split('\n').map(l=>l.trim()).filter(l=>l.length>0); await chrome.storage.local.set({ openPhishList:list, openPhishTime:Date.now() }); list.forEach(u=>blackListingSet.add(u)); logger.info(`OP: ${list.length}`); }
     }
-
-    // 3. AntiScam Whitelist
     const { whitelistTime } = await chrome.storage.local.get('whitelistTime');
-    if (!whitelistTime || (Date.now() - whitelistTime >= BLACKLIST_TTL_MS)) {
+    if (!whitelistTime || Date.now()-whitelistTime >= BLACKLIST_TTL_MS) {
       const data = await fetchWithRetry(`${API_BASE}/v1/whitelist`, 'antiScamApi', true);
-      if (data && Array.isArray(data)) {
-        const list = data.map(item => item.url).filter(Boolean);
-        await chrome.storage.local.set({ whitelist: list, whitelistTime: Date.now() });
-        whiteListingSet.clear();
-        list.forEach(u => whiteListingSet.add(u));
-        logger.info(`Whitelist cập nhật: ${list.length} entries`);
-      }
+      if (data && Array.isArray(data)) { const list = data.map(i=>i.url).filter(Boolean); await chrome.storage.local.set({ whitelist:list, whitelistTime:Date.now() }); whiteListingSet.clear(); list.forEach(u=>whiteListingSet.add(u)); logger.info(`WL: ${list.length}`); }
     }
+  } catch(e){ logger.error('startup', e); }
+  finally { startupInProgress = false; }
+};
 
-  } catch (err) {
-    logger.error('startup error:', err);
-  } finally {
-    startupInProgress = false;
+// ═══════════════════════════════════════════════════════════════════════════
+// REDIRECT CHAIN TRACKING  (Vấn đề 7)
+// ═══════════════════════════════════════════════════════════════════════════
+const redirectChains = new Map(); // tabId -> string[]
+const getRedirectChain = (tabId) => redirectChains.get(tabId) || [];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REPUTATION ENGINE  (Vấn đề 11)
+// ═══════════════════════════════════════════════════════════════════════════
+const resolveReputation = (domain, registrable, urlString) => {
+  const inBuiltWhitelist = typeof REPUTATION_WHITELIST !== 'undefined' && REPUTATION_WHITELIST.has(registrable);
+  // CLD whitelist (tải từ API)
+  let inCldWhitelist = false;
+  for (const w of whiteListingSet) { if (w.includes(domain) || w.includes(registrable)) { inCldWhitelist = true; break; } }
+  // Blacklist
+  let inBlacklist = blackListingSet.has(urlString) || blackListingSet.has(urlString.replace(/\/$/,''));
+  // wildcard
+  if (!inBlacklist && blackListing.length) {
+    for (const b of blackListing) { if (urlString.includes(b.replace(/\/$/,''))) { inBlacklist = true; break; } }
   }
+  const officialBrand = typeof isOfficialBrandDomain !== 'undefined' ? isOfficialBrandDomain(domain) : null;
+  return {
+    inWhitelist: inBuiltWhitelist || inCldWhitelist,
+    inBlacklist,
+    isOfficialBrand: !!officialBrand,
+    checked: true,
+  };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Utility
+// Utility
 // ─────────────────────────────────────────────────────────────────────────────
-const getDomain = (url) => {
-  const matches = url.match(/^https?:\/\/([^/?#]+)(?:[/?#]|$)/i);
-  return (matches && matches[1]) || '';
+const getDomain = (url) => { const m = url.match(/^https?:\/\/([^/?#]+)(?:[/?#]|$)/i); return (m && m[1]) || ''; };
+const createUrlObject = (url) => { try { return new URL(url); } catch { return null; } };
+const getRegistrable = (domain) => {
+  if (typeof self !== 'undefined' && self.getRegistrableDomain) return self.getRegistrableDomain(domain);
+  let h = (domain||'').toLowerCase().replace(/^www\./,''); return h.split('.').slice(-2).join('.');
 };
 
-const createUrlObject = (url) => {
-  try { return new URL(url); } catch { return null; }
+const updateBadge = (isPhishing, finalScore, tabId) => {
+  const title = isPhishing ? `AntiScam: ⚠️ Cảnh báo (${finalScore}% an toàn)` : `AntiScam: ✅ An toàn (${finalScore}%)`;
+  chrome.action.setTitle({ title, tabId }).catch(()=>{});
+  chrome.action.setIcon({ path: 'assets/antiScamLogo.png', tabId }).catch(()=>{});
 };
 
-const updateBadge = (isPhishing, legitimatePercent, tabId) => {
-  const title = isPhishing
-    ? `AntiScam: ⚠️ Cảnh báo (${Math.round(legitimatePercent)}% an toàn)`
-    : `AntiScam: ✅ An toàn (${Math.round(legitimatePercent)}%)`;
-  // Chrome MV3 doesn't guarantee setIcon is supported directly with path if not all dimensions are provided,
-  // but it's okay, we'll keep the existing code
-  chrome.action.setTitle({ title, tabId }).catch(() => {});
-  chrome.action.setIcon({ path: 'assets/antiScamLogo.png', tabId }).catch((err) => {
-    logger.warn('setIcon failed:', err.message);
-  });
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Classification
-// ─────────────────────────────────────────────────────────────────────────────
-const classify = async (tabId, result, urlString) => {
+// ═══════════════════════════════════════════════════════════════════════════
+// CLASSIFICATION  —  ENGINE V2 (Trust / Risk / Confidence)
+// ═══════════════════════════════════════════════════════════════════════════
+const classify = async (tabId, featuresResult, urlString, domInput = {}, isUpdate = false) => {
   try {
-    const existing = await getTabState(tabId);
-    if (existing && existing.url === urlString && existing.status === ANALYSIS_STATUS.SUCCESS) {
-      return; // Bỏ qua nếu đã xong
+    const domain = getDomain(urlString);
+    const registrable = getRegistrable(domain);
+
+    // 1. Whitelist (CLD) → an toàn tuyệt đối
+    let inCldWhitelist = false;
+    for (const w of whiteListingSet) { if (w.includes(domain) || w.includes(registrable)) { inCldWhitelist = true; break; } }
+    if (inCldWhitelist) {
+      await setTabState(tabId, { status: ANALYSIS_STATUS.SUCCESS, isWhiteList: domain, isPhish: false,
+        legitimatePercent: 100, confidence: 95, result: {}, summary: 'Trang nằm trong danh sách tin cậy.', url: urlString });
+      updateBadge(false, 100, tabId); return;
     }
 
-    const domain = getDomain(urlString);
-    
-    // 1. Kiểm tra Whitelist
-    let inWhitelist = false;
-    for (const w of whiteListingSet) {
-      if (w.includes(domain)) {
-        inWhitelist = true;
-        break;
+    // 2. Cache (chỉ cho lần đầu, không cho update)
+    if (!isUpdate) {
+      const cached = await getUrlCache(urlString);
+      if (cached) {
+        await setTabState(tabId, { status: ANALYSIS_STATUS.SUCCESS, isPhish: cached.isPhish,
+          legitimatePercent: cached.legitimatePercent, confidence: cached.confidence,
+          result: cached.result || {}, summary: cached.summary || '', isUnknown: cached.isUnknown, url: urlString });
+        updateBadge(cached.isPhish, cached.legitimatePercent, tabId); return;
       }
     }
 
-    if (inWhitelist) {
-      await setTabState(tabId, {
-        status: ANALYSIS_STATUS.SUCCESS,
-        isWhiteList: domain,
-        isPhish: false,
-        legitimatePercent: 100,
-        result: {},
-        url: urlString,
-      });
-      updateBadge(false, 100, tabId);
-      return;
-    }
+    // 3. Domain age + reputation + redirect chain
+    const prev = await getTabState(tabId);
+    const domainAgeDays = await fetchDomainAge(domain);
+    const reputation = resolveReputation(domain, registrable, urlString);
+    const redirectChain = getRedirectChain(tabId);
 
-    // 2. Check URL Cache
-    const cachedResult = await getUrlCache(urlString);
-    if (cachedResult) {
-      await setTabState(tabId, {
-        status: ANALYSIS_STATUS.SUCCESS,
-        isPhish: cachedResult.isPhish,
-        legitimatePercent: cachedResult.legitimatePercent,
-        result: cachedResult.result || result,
-        url: urlString,
-      });
-      updateBadge(cachedResult.isPhish, cachedResult.legitimatePercent, tabId);
-      return;
-    }
+    // 4. stabilityMs + risk-decay tracking (Vấn đề 9, 13)
+    let analysisStart = prev && prev.analysisStart ? prev.analysisStart : Date.now();
+    const prevRisk = prev && prev.riskScore != null ? prev.riskScore : 0;
+    const stabilityMs = Date.now() - analysisStart;
 
-    // 3. Tính ML Model Score
-    let legitimateCount = 0, suspiciousCount = 0, phishingCount = 0;
-    for (const key in result) {
-      if (key === 'tab') continue;
-      if (result[key] == '1') phishingCount++;
-      else if (result[key] == '0') suspiciousCount++;
-      else legitimateCount++;
-    }
-    const total = phishingCount + suspiciousCount + legitimateCount;
-    let legitimatePercent = total > 0 ? (legitimateCount / total) * 100 : 0;
+    // 5. computeScore (engine chính)
+    const assessment = computeScore(urlString, {
+      dom: domInput || {},
+      domainAgeDays,
+      reputation,
+      redirectChain,
+      stabilityMs,
+    });
 
-    const resultValues = Object.entries(result)
-      .filter(([k]) => k !== 'tab')
-      .map(([, v]) => parseInt(v));
+    let riskScore = assessment.riskScore;
+    let finalScore = assessment.finalScore;
+    let confidence = assessment.confidence;
 
-    let isPhishML = false;
+    // 6. ML (tín hiệu phụ — giảm FP, không tự kết luận)
+    const resultValues = Object.entries(featuresResult || {})
+      .filter(([k]) => k !== 'tab').map(([,v]) => parseInt(v));
     const clf = await fetchCLF();
     if (clf && resultValues.length) {
-      const rf = randomForest(clf);
-      isPhishML = rf.predict([resultValues])[0][0];
+      try {
+        const isPhishML = randomForest(clf).predict([resultValues])[0][0];
+        if (isPhishML && riskScore < 40) { riskScore += 8; finalScore = Math.max(0, finalScore - 8); }
+      } catch(e){ logger.warn('ML fail', e.message); }
     }
 
-    // 4. Tính Heuristic Score (Local Engine)
-    let heuristicIsPhish = false;
-    if (typeof computeHeuristicScore !== 'undefined') {
-      const hResult = computeHeuristicScore(urlString);
-      if (hResult.riskLevel === 'dangerous') {
-        heuristicIsPhish = true;
-        // Phạt legitimatePercent nếu heuristic phát hiện nguy hiểm
-        legitimatePercent = Math.min(legitimatePercent, 100 - hResult.score);
-      } else if (hResult.riskLevel === 'suspicious') {
-        legitimatePercent = Math.max(0, legitimatePercent - (hResult.score / 2));
-      }
-    }
+    // 7. Risk decay: nếu risk GIẢM so với lần trước → trang ổn định → reset timer
+    //    nếu risk TĂNG (tín hiệu mới) → reset stability
+    if (riskScore > prevRisk + 3) analysisStart = Date.now();
 
-    // 5. Tính Tuổi Tên miền (Domain Age) qua RDAP
-    const domainAgeDays = await fetchDomainAge(domain);
-    if (domainAgeDays >= 0) {
-      if (domainAgeDays < 3) {
-        heuristicIsPhish = true;
-        legitimatePercent = Math.max(0, legitimatePercent - 50); // Phạt nặng
-        result['Domain Age'] = '1';
-      } else if (domainAgeDays < 30) {
-        legitimatePercent = Math.max(0, legitimatePercent - 20); // Phạt vừa
-        result['Domain Age'] = '0';
-      } else {
-        result['Domain Age'] = '-1';
-      }
-    }
+    // 8. MERGE result: giữ toàn bộ ~20 features từ features.js + overlay badges từ engine
+    //    (trước đây bị ghi đè mất → giờ merge để hiển thị đầy đủ)
+    const mergedResult = {};
+    // Layer 1: features từ content script (IP, URL Length, Anchor, Request URL, ...)
+    for (const k in (featuresResult || {})) { if (k !== 'tab') mergedResult[k] = featuresResult[k]; }
+    // Layer 2: trust badges + risk badges từ engine (overlay — engine có quyền ưu tiên)
+    for (const k in (assessment.result || {})) { mergedResult[k] = assessment.result[k]; }
 
-    // 5.a. Hoàn thiện đánh giá Obfuscated Script với Layer 4 (Domain Reputation)
-    if (result['Obfuscation Confidence'] !== undefined) {
-      let obfConf = result['Obfuscation Confidence'] || 0;
-      let obfRisk = result['Obfuscation Risk'] || 0;
-      
-      if (domainAgeDays >= 0 && domainAgeDays < 3) obfRisk += 20;
-      else if (domainAgeDays >= 0 && domainAgeDays < 7) obfRisk += 10;
-      
-      if (obfConf >= 75 && obfRisk >= 60) {
-        result['Obfuscated Script'] = '1';
-      } else if (obfConf >= 51) {
-        result['Obfuscated Script'] = '0';
-      } else {
-        result['Obfuscated Script'] = '-1';
-      }
-      
-      delete result['Obfuscation Confidence'];
-      delete result['Obfuscation Risk'];
-    }
-
-    // 5.b. Override cứng: các tín hiệu cực kỳ nguy hiếm bất kể ML nói gì
-    if (result['Obfuscated Script'] === '1') {
-      heuristicIsPhish = true;
-      legitimatePercent = Math.max(0, legitimatePercent - 15); // Phạt mềm vì engine bên features.js đã quét rất kỹ và chính xác
-    }
-    if (result['Form Hijacking'] === '1') {
-      heuristicIsPhish = true;
-      legitimatePercent = Math.min(legitimatePercent, 20); // nguy hiểm cực cao
-    }
-
-    // 6. Kết hợp
-    let isPhish = isPhishML || heuristicIsPhish;
-    
-    // Safety guard
-    if (isPhish && legitimatePercent > 70) {
-      isPhish = false; // Phủ quyết nếu ML phân tích nhầm nhưng URL an toàn cao
-    } else if (!isPhish && legitimatePercent < 30) {
-      isPhish = true; // Bắt nếu điểm an toàn quá thấp
-    }
-
+    // 9. Lưu state
+    const isPhish = finalScore <= 30;
     await setTabState(tabId, {
       status: ANALYSIS_STATUS.SUCCESS,
       isPhish,
-      legitimatePercent,
-      result,
+      legitimatePercent: finalScore,
+      confidence,
+      trustScore: assessment.trustScore,
+      riskScore,
+      isUnknown: assessment.isUnknown,
+      result: mergedResult,
+      summary: assessment.summary,
+      redirectHops: assessment.redirectHops,
+      counts: (domInput && domInput.counts) ? domInput.counts : null,
+      analysisStart,
       url: urlString,
     });
-    
-    // Lưu cache để lần sau không phải tính lại
-    await setUrlCache(urlString, {
-      isPhish,
-      legitimatePercent,
-      result
-    });
 
-    updateBadge(isPhish, legitimatePercent, tabId);
+    // 10. Cache (chỉ lần đầu)
+    if (!isUpdate) {
+      await setUrlCache(urlString, { isPhish, legitimatePercent: finalScore, confidence, result: mergedResult, summary: assessment.summary, isUnknown: assessment.isUnknown });
+    }
 
+    updateBadge(isPhish, finalScore, tabId);
   } catch (err) {
-    logger.error(`classify tab ${tabId} exception:`, err);
-    await setTabState(tabId, {
-      status: ANALYSIS_STATUS.FAILED,
-      isPhish: false,
-      legitimatePercent: 0,
-      result: result || {},
-      url: urlString,
-    });
+    logger.error(`classify ${tabId}:`, err);
+    await setTabState(tabId, { status: ANALYSIS_STATUS.FAILED, isPhish: false, legitimatePercent: 0,
+      result: featuresResult || {}, summary: 'Không thể phân tích trang này.', url: urlString });
   }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Blocking & SafeCheck
+// Blocking & SafeCheck
 // ─────────────────────────────────────────────────────────────────────────────
 const blockingFunction = (url, blackSite, tabId) => {
-  const message = {
-    site: url,
-    match: blackSite,
-    title: url,
-    lenient: inputBlockLenient,
-    favicon: `https://www.google.com/s2/favicons?domain=${url}`,
-  };
-
-  setTabState(tabId, {
-    status: ANALYSIS_STATUS.SUCCESS,
-    isBlocked: url,
-    isPhish: true,
-    legitimatePercent: 0,
-    result: {},
-    url,
-  }).catch(() => {});
-
-  const redirectUrl = `${chrome.runtime.getURL('blocking.html')}#${JSON.stringify(message)}`;
-  chrome.tabs.update(tabId, { url: redirectUrl }).catch(err => {
-    logger.error('blockingFunction tabs.update failed:', err);
-  });
+  const message = { site: url, match: blackSite, title: url, lenient: inputBlockLenient,
+    favicon: `https://www.google.com/s2/favicons?domain=${url}` };
+  setTabState(tabId, { status: ANALYSIS_STATUS.SUCCESS, isBlocked: url, isPhish: true,
+    legitimatePercent: 0, confidence: 95, result: {}, summary: 'Trang này nằm trong danh sách đen đã xác nhận.', url }).catch(()=>{});
+  chrome.tabs.update(tabId, { url: `${chrome.runtime.getURL('blocking.html')}#${JSON.stringify(message)}` }).catch(e=>logger.error('blocking', e));
 };
 
 const safeCheck = ({ url, tabId }) => {
   if (!url || url.startsWith('chrome://') || url.startsWith(chrome.runtime.getURL('/'))) return;
-
-  // Exact match (OpenPhish + CLD)
-  if (blackListingSet.has(url) || blackListingSet.has(url.replace(/\/$/, ''))) {
-    blockingFunction(url, url, tabId);
-    return;
-  }
-
-  // Wildcard match (CLD)
+  if (blackListingSet.has(url) || blackListingSet.has(url.replace(/\/$/,''))) { blockingFunction(url, url, tabId); return; }
   if (!blackListing || !blackListing.length) return;
-
-  const currentUrl = createUrlObject(url);
-  if (!currentUrl) return;
-
-  let currentSiteDomain = '';
-  try {
-    if (typeof psl !== 'undefined') {
-      currentSiteDomain = psl.parse(currentUrl.host).domain || '';
-    }
-  } catch {
-    currentSiteDomain = currentUrl.host;
-  }
-
-  const currentPath = currentUrl.href.replaceAll('/', '');
-
-  for (let i = 0; i < blackListing.length; ++i) {
-    const blackSite = createUrlObject(blackListing[i]);
-    if (!blackSite) continue;
-
-    const prefix = blackSite.host.split('.')[0];
-    const suffix = blackSite.pathname;
-
-    if (prefix === '%2A' && currentSiteDomain) {
-      const blackDomain = blackSite.host.slice(4);
-      if (blackDomain === currentSiteDomain) {
-        blockingFunction(url, blackSite.host, tabId);
-        return;
-      }
-    }
-    if (suffix === '/*' && currentUrl.host === blackSite.host) {
-      blockingFunction(url, blackSite.host, tabId);
-      return;
-    }
-    if (currentPath && currentPath === blackSite.href.replaceAll('/', '')) {
-      blockingFunction(url, blackSite.host, tabId);
-      return;
-    }
+  const cur = createUrlObject(url); if (!cur) return;
+  let curDom = ''; try { if (typeof psl!=='undefined') curDom = psl.parse(cur.host).domain || ''; } catch { curDom = cur.host; }
+  const curPath = cur.href.replaceAll('/','');
+  for (let i=0;i<blackListing.length;++i) {
+    const bs = createUrlObject(blackListing[i]); if (!bs) continue;
+    const prefix = bs.host.split('.')[0], suffix = bs.pathname;
+    if (prefix === '%2A' && curDom) { const bd = bs.host.slice(4); if (bd === curDom) { blockingFunction(url, bs.host, tabId); return; } }
+    if (suffix === '/*' && cur.host === bs.host) { blockingFunction(url, bs.host, tabId); return; }
+    if (curPath && curPath === bs.href.replaceAll('/','')) { blockingFunction(url, bs.host, tabId); return; }
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Event Listeners
-// ─────────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Event Listeners
+// ═══════════════════════════════════════════════════════════════════════════
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.type === 'ANALYSIS_RESULT') {
+  if (request.type === 'ANALYSIS_RESULT' || request.type === 'ANALYSIS_UPDATE') {
     const tabId = sender.tab ? sender.tab.id : null;
     const tabUrl = sender.tab ? sender.tab.url : null;
-    if (!tabId) {
-      sendResponse({ ok: false, reason: 'no sender tab' });
-      return true;
-    }
+    if (!tabId) { sendResponse({ ok:false }); return true; }
+    const isUpdate = request.type === 'ANALYSIS_UPDATE';
 
-    setTabState(tabId, {
-      status: ANALYSIS_STATUS.ANALYZING,
-      result: request.result,
-      url: tabUrl,
-      isPhish: false,
-      legitimatePercent: 0,
-    }).then(() => classify(tabId, request.result, tabUrl))
-      .then(() => sendResponse({ ok: true }))
-      .catch(err => {
-        logger.error('ANALYSIS_RESULT handler error:', err);
-        sendResponse({ ok: false, reason: err.message });
-      });
+    if (!isUpdate) {
+      setTabState(tabId, { status: ANALYSIS_STATUS.ANALYZING, result: request.result, url: tabUrl, isPhish: false, legitimatePercent: 0 })
+        .then(() => classify(tabId, request.result, tabUrl, request.dom, false))
+        .then(() => sendResponse({ ok:true }))
+        .catch(err => { logger.error('ANALYSIS_RESULT', err); sendResponse({ ok:false }); });
+    } else {
+      // Real-time update — chỉ recompute, không reset status/caching
+      classify(tabId, request.result, tabUrl, request.dom, true)
+        .then(() => sendResponse({ ok:true }))
+        .catch(err => { logger.error('ANALYSIS_UPDATE', err); sendResponse({ ok:false }); });
+    }
     return true;
   }
 
   if (request.type === 'GET_TAB_STATE') {
-    const tabId = request.tabId;
-    if (!tabId) { sendResponse(null); return true; }
-    getTabState(tabId).then(sendResponse).catch(() => sendResponse(null));
-    return true;
+    const tabId = request.tabId; if (!tabId) { sendResponse(null); return true; }
+    getTabState(tabId).then(sendResponse).catch(()=>sendResponse(null)); return true;
   }
-
   if (request.type === 'SET_WHITELIST_TEMP') {
-    const tabId = request.tabId;
-    if (!tabId) { sendResponse({ ok: false }); return true; }
-    setTabState(tabId, {
-      status: ANALYSIS_STATUS.IDLE,
-      isWhiteList: null,
-      isBlocked: null,
-      url: null,
-    }).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
-    return true;
+    const tabId = request.tabId; if (!tabId) { sendResponse({ ok:false }); return true; }
+    setTabState(tabId, { status: ANALYSIS_STATUS.IDLE, isWhiteList:null, isBlocked:null, url:null })
+      .then(()=>sendResponse({ok:true})).catch(()=>sendResponse({ok:false})); return true;
   }
-
   if (request.type === 'SET_ICON') {
-    chrome.action.setIcon({ path: request.path, tabId: request.tabId }).catch(() => {});
-    sendResponse({ ok: true });
-    return true;
+    chrome.action.setIcon({ path: request.path, tabId: request.tabId }).catch(()=>{});
+    sendResponse({ ok:true }); return true;
   }
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => removeTabState(tabId));
+// Redirect chain tracking (Vấn đề 7)
+chrome.webRequest.onBeforeRequest.addListener((details) => {
+  if (details.type === 'main_frame' && details.tabId >= 0) {
+    redirectChains.set(details.tabId, [details.url]);
+  }
+}, { urls: ['*://*/*'], types: ['main_frame'] });
+
+chrome.webRequest.onBeforeRedirect.addListener((details) => {
+  if ((details.type === 'main_frame' || details.type === 'sub_frame') && details.tabId >= 0 && details.redirectUrl) {
+    const chain = redirectChains.get(details.tabId) || [];
+    if (!chain.includes(details.redirectUrl)) chain.push(details.redirectUrl);
+    redirectChains.set(details.tabId, chain);
+  }
+}, { urls: ['*://*/*'], types: ['main_frame', 'sub_frame'] });
+
+chrome.tabs.onRemoved.addListener((tabId) => { removeTabState(tabId); redirectChains.delete(tabId); });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'loading' && changeInfo.url) {
-    setTabState(tabId, {
-      status: ANALYSIS_STATUS.ANALYZING,
-      result: null,
-      url: changeInfo.url,
-      isPhish: false,
-      legitimatePercent: 0,
-    }).catch(() => {});
+    redirectChains.set(tabId, [changeInfo.url]);
+    setTabState(tabId, { status: ANALYSIS_STATUS.ANALYZING, result: null, url: changeInfo.url, isPhish: false, legitimatePercent: 0 }).catch(()=>{});
   }
 });
 
 chrome.runtime.onConnect.addListener((port) => {
   switch (port.name) {
     case PORT_REDIRECT:
-      port.onMessage.addListener((msg) => {
-        chrome.tabs.query({ currentWindow: true, active: true }, ([tab]) => {
-          if (tab && msg.redirect) chrome.tabs.update(tab.id, { url: msg.redirect });
-        });
-      });
+      port.onMessage.addListener((msg) => { chrome.tabs.query({ currentWindow:true, active:true }, ([tab]) => { if (tab && msg.redirect) chrome.tabs.update(tab.id, { url: msg.redirect }); }); });
       break;
     case PORT_CLOSE_TAB:
-      port.onMessage.addListener((msg) => {
-        if (msg.close_tab) {
-          chrome.tabs.query({ currentWindow: true, active: true }, ([tab]) => {
-            if (tab) chrome.tabs.remove(tab.id);
-          });
-        }
-      });
+      port.onMessage.addListener((msg) => { if (msg.close_tab) chrome.tabs.query({ currentWindow:true, active:true }, ([tab]) => { if (tab) chrome.tabs.remove(tab.id); }); });
       break;
   }
 });
 
 chrome.webRequest.onBeforeRequest.addListener(safeCheck, { urls: ['*://*/*'], types: ['main_frame'] });
 
-chrome.runtime.onStartup.addListener(() => startup().catch(() => {}));
+chrome.runtime.onStartup.addListener(() => startup().catch(()=>{}));
 chrome.runtime.onInstalled.addListener(() => {
-  startup().catch(() => {});
-  chrome.notifications.create({
-    type: 'basic',
-    iconUrl: chrome.runtime.getURL('assets/antiScamLogo.png'),
-    title: 'Cài đặt thành công v1.5!',
-    message: 'AntiScam v1.5 đã sẵn sàng bảo vệ bạn khỏi các trang lừa đảo.',
-  });
+  startup().catch(()=>{});
+  chrome.notifications.create({ type:'basic', iconUrl: chrome.runtime.getURL('assets/antiScamLogo.png'),
+    title: 'Cài đặt thành công v2.0!', message: 'AntiScam v2.0 — engine Trust/Risk/Confidence đã sẵn sàng.' });
 });
 
-startup().catch(() => {});
+startup().catch(()=>{});

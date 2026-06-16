@@ -1,201 +1,198 @@
-/*global chrome*/
-/*global $*/
+/* global chrome */
+/* global $ */
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Màu sắc cho các yếu tố phân tích (giữ nguyên)
+// Màu sắc badge (giữ nguyên)
 // ─────────────────────────────────────────────────────────────────────────────
-const colors = {
-  '-1': '#28a745',  // An toàn — xanh dương
-  '0':  '#ffeb3c',  // Nghi ngờ — vàng
-  '1':  '#cc0000',  // Nguy hiểm — đỏ
-};
+// Badge values V3: SAFE(-1) NEUTRAL(0) SUSPICIOUS(2) DANGEROUS(1)
+// '-1' xanh (an toàn) | '0' vàng (trung tính) | '2' cam (đáng ngờ) | '1' đỏ (nguy hiểm)
+const colors = { '-1':'#28a745', '0':'#ffeb3c', '2':'#ff8c00', '1':'#cc0000' };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Cấu hình polling
+// Cấu hình polling — V2: liên tục (dynamic score)
 // ─────────────────────────────────────────────────────────────────────────────
-const POLL_INTERVAL_MS  = 800;   // Kiểm tra mỗi 800ms
-const POLL_MAX_ATTEMPTS = 19;    // Tối đa ~15 giây
+const POLL_INTERVAL_MS = 800;       // giai đoạn chờ phân tích đầu
+const UPDATE_INTERVAL_MS = 1500;    // sau khi có kết quả → cập nhật realtime
+const POLL_MAX_ATTEMPTS = 19;
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Collapsible "Xem chi tiết" (giữ nguyên logic gốc)
+// Collapsible "Xem chi tiết" (giữ nguyên)
 // ─────────────────────────────────────────────────────────────────────────────
 [...document.getElementsByClassName('collapsible')].forEach((el) => {
   el.addEventListener('click', function () {
     this.classList.toggle('active');
     const content = this.nextElementSibling;
-    if (content.style.maxHeight) {
-      content.style.maxHeight = null;
-    } else {
-      content.style.maxHeight = `${content.scrollHeight}px`;
-    }
+    if (content.style.maxHeight) { content.style.maxHeight = null; }
+    else { content.style.maxHeight = `${content.scrollHeight}px`; }
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Bảng dịch thuật ngữ kỹ thuật → tiếng Việt dễ hiểu
+// Bảng dịch thuật (giữ key cũ + thêm key V2)
 // ─────────────────────────────────────────────────────────────────────────────
 const featureTranslations = {
-  'IP Address':                  'Địa chỉ IP',
-  'URL Length':                  'Độ dài đường dẫn',
-  'Tiny URL':                    'URL rút gọn',
-  '@ Symbol':                    'Chứa ký tự @',
-  'Redirecting using //':        'Chuyển hướng ẩn (//)',
-  '(-) Prefix/Suffix in domain': 'Có dấu (-) trong tên miền',
-  'No. of Sub Domains':          'Nhiều tên miền phụ',
-  'HTTPS':                       'Bảo mật HTTPS',
-  'Favicon':                     'Biểu tượng trang (Favicon)',
-  'Port':                        'Cổng mạng (Port)',
-  "HTTPS in URL's domain part":  'HTTPS giả mạo',
-  'Request URL':                 'Tài nguyên từ trang khác',
-  'Anchor':                      'Liên kết ngoài',
-  'Script & Link':               'Mã nhúng từ trang khác',
-  'SFH':                         'Xử lý dữ liệu (Form) ẩn',
-  'mailto':                      'Gửi dữ liệu qua email',
-  'iFrames':                     'Khung trang ẩn (iFrame)',
-  'Sensitive Form':              'Yêu cầu nhập Mật khẩu/OTP',
-  'Form Hijacking':              'Chiếm đoạt dữ liệu Form (Cross-Domain)',
-  'Obfuscated Script':           'Mã độc ẩn (Obfuscated)',
-  'Domain Age':                  'Tuổi đời tên miền ngắn',
+  // gốc
+  'IP Address':'Địa chỉ IP','URL Length':'Độ dài đường dẫn','Tiny URL':'URL rút gọn',
+  '@ Symbol':'Chứa ký tự @','Redirecting using //':'Chuyển hướng ẩn (//)',
+  '(-) Prefix/Suffix in domain':'Có dấu (-) trong tên miền','No. of Sub Domains':'Nhiều tên miền phụ',
+  'HTTPS':'Bảo mật HTTPS','Favicon':'Biểu tượng trang (Favicon)','Port':'Cổng mạng (Port)',
+  "HTTPS in URL's domain part":'HTTPS giả mạo','Request URL':'Tài nguyên từ trang khác',
+  'Anchor':'Liên kết ngoài','Script & Link':'Mã nhúng từ trang khác','SFH':'Biểu mẫu không rõ nơi nhận dữ liệu',
+  'mailto':'Gửi dữ liệu qua email','iFrames':'Khung trang ẩn (iFrame)',
+  'Sensitive Form':'Yêu cầu nhập Mật khẩu/OTP','Form Hijacking':'Chiếm đoạt dữ liệu Form',
+  'Obfuscated Script':'Mã độc ẩn (Obfuscated)','Domain Age':'Tên miền mới đăng ký',
+  // V2 — risk badges
+  'Punycode':'Tên miền mã hoá (Punycode)','UnicodeHost':'Ký tự Unicode bất thường',
+  'Homograph':'Giả mạo thương hiệu (ký tự giống)','Typosquat':'Tên miền gần giống thương hiệu',
+  'BrandInDomain':'Tên miền chứa tên thương hiệu lạ','BrandInPath':'Đường dẫn nhắc thương hiệu',
+  'BrandImpersonation':'Giả mạo thương hiệu trong nội dung','VNScamKeyword':'URL chứa từ khoá lừa đảo (VN)',
+  'Keylogger':'Theo dõi thao tác gõ phím','ClipboardHijack':'Can thiệp bộ nhớ tạm',
+  'DangerousDownload':'Yêu cầu tải file nguy hiểm','SuspiciousExternal':'Tải mã từ nguồn lạ',
+  'NoHTTPS':'Không dùng HTTPS','AtSymbol':'URL chứa ký tự @','LongURL':'Đường dẫn quá dài',
+  'SuspiciousTLD':'Đuôi tên miền dễ lạm dụng','IPHost':'Truy cập bằng địa chỉ IP',
+  'RedirectChain':'Chuỗi chuyển hướng phức tạp',
+  'DataExfil':'Gửi dữ liệu ra tên miền lạ',
+  'FormDest':'Biểu mẫu gửi dữ liệu đến tên miền lạ',
+  // V2 — trust badges (xanh)
+  'EstablishedDomain':'Tên miền lâu đời','ReputationVerified':'Nằm trong danh sách tin cậy',
+  'OfficialBrand':'Thương hiệu chính thức','SSL':'Có chứng chỉ HTTPS',
+  'TrustedResources':'Tài nguyên từ nguồn phổ biến',
+  'CleanScan':'Quét toàn diện: không phát hiện mối đe dọa',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Render kết quả phân tích vào UI (không thay đổi cấu trúc HTML/CSS)
+// Theo dõi class động để xoá khi re-render (idempotent — không trùng lớp)
+// ─────────────────────────────────────────────────────────────────────────────
+let _dynClasses = { pct:[], score:[], msg:[] };
+const _cleanDyn = () => {
+  const pc = document.getElementById('percentage_content');
+  const ss = document.getElementById('site_score');
+  const sm = document.getElementById('site_msg');
+  _dynClasses.pct.forEach(c => pc && pc.classList.remove(c));
+  _dynClasses.score.forEach(c => ss && ss.classList.remove(c));
+  _dynClasses.msg.forEach(c => sm && sm.classList.remove(c));
+  _dynClasses = { pct:[], score:[], msg:[] };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Map key badge → số lượng (lấy từ state.counts)
+// Trả về HTML <span class="badge-count"> cho thống nhất
+// - Số LƯỢNG tuyệt đối (iframe, form): ×3
+// - TỶ LỆ (anchor, script, image): 2/12
+// ĐỒNG NHẤT: luôn dùng cú pháp [số] trong tag riêng (badge-count)
+// ─────────────────────────────────────────────────────────────────────────────
+const _countData = (key, counts) => {
+  if (!counts) return null;
+  switch (key) {
+    case 'iFrames':
+      if (counts.hiddenIframes > 0) return { text: counts.hiddenIframes > 1 ? '×' + counts.hiddenIframes : '1' };
+      break;
+    case 'Anchor':
+      if (counts.externalAnchors > 0) return { text: counts.externalAnchors + '/' + counts.totalAnchors };
+      break;
+    case 'Script & Link':
+      if (counts.externalScripts > 0) return { text: counts.externalScripts + '/' + counts.totalScripts };
+      break;
+    case 'Request URL':
+      if (counts.externalImages > 0) return { text: counts.externalImages + '/' + counts.totalImages };
+      break;
+    case 'Sensitive Form':
+      if (counts.sensitiveForms > 1) return { text: '×' + counts.sensitiveForms };
+      break;
+  }
+  return null;
+};
+
+// Tạo text + HTML count badge cho một key
+const _buildBadge = (key, val, counts) => {
+  const label = featureTranslations[key] || key;
+  const cd = _countData(key, counts);
+  if (!cd) return { text: label, html: label, hasCount: false };
+  // text thuần (cho fallback)
+  const fullText = label + ' (' + cd.text + ')';
+  // HTML có span count style riêng (cho CẢ safe + warn)
+  const html = label + ' <span style="display:inline-block;background:rgba(0,0,0,0.3);border-radius:0.6rem;padding:0.05rem 0.5rem;margin-left:0.3rem;font-size:0.85em;font-weight:600;opacity:0.9;">' + cd.text + '</span>';
+  return { text: fullText, html: html, hasCount: true };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Render (không thay đổi cấu trúc HTML/CSS)
 // ─────────────────────────────────────────────────────────────────────────────
 const renderState = (state, domain) => {
-  const { isWhiteList, isBlocked, isPhish, legitimatePercent, result, status } = state;
+  const { isWhiteList, isBlocked, isPhish, legitimatePercent, result, status, confidence, isUnknown } = state;
 
-  // Trường hợp 1: URL nằm trong whitelist — an toàn tuyệt đối
   if (isWhiteList) {
-    $('#pluginBody').hide();
-    $('#isSafe').show();
-    $('#isSafe .site-url').text(domain);
-    return;
+    $('#pluginBody').hide(); $('#isSafe').show(); $('#isSafe .site-url').text(domain); return;
   }
-
-  // Trường hợp 2: URL đã bị chặn — trang nguy hiểm
   if (isBlocked) {
-    $('#pluginBody').hide();
-    $('#isPhishing').show();
-    $('#isPhishing .site-url').text(isBlocked);
-    return;
+    $('#pluginBody').hide(); $('#isPhishing').show(); $('#isPhishing .site-url').text(isBlocked); return;
   }
 
-  // Trường hợp 3: Kết quả phân tích ML
+  // Xoá class động từ lần render trước
+  _cleanDyn();
+
   const featureList = document.getElementById('features');
-  featureList.innerHTML = ''; // Xóa items cũ trước khi render
+  featureList.innerHTML = '';
 
   if (result && typeof result === 'object') {
-    const safeItems = [];
-    const warnItems = [];
-
+    const counts = state.counts || null;
+    const seen = new Set(); // tránh trùng key
+    const safeItems = [], warnItems = [];
     for (const key in result) {
-      if (key === 'tab') continue;
+      if (key === 'tab' || seen.has(key)) continue;
+      seen.add(key);
       const val = result[key];
+      const badge = _buildBadge(key, val, counts);
       if (val === '-1') {
-        safeItems.push(featureTranslations[key] || key);
+        safeItems.push(badge.html); // dùng HTML để giữ span count
       } else {
-        // Hển thị badge đỏ/vàng (nguy hiểm / ngũ ngờ)
         const li = document.createElement('li');
-        li.textContent = featureTranslations[key] || key;
+        if (badge.hasCount) {
+          li.innerHTML = badge.html; // có span count
+        } else {
+          li.textContent = badge.text;
+        }
         li.style.backgroundColor = colors[val];
-        if (val === '0') li.style.color = '#000';
+        if (val === '0' || val === '2') li.style.color = '#000';
         warnItems.push(li);
       }
     }
-
-    // Hiển thị các badge cảnh báo trước
     warnItems.forEach(li => featureList.appendChild(li));
 
-    // Nếu có tính năng an toàn, hiển thị dưới dạng badge tổng hợp có thể bấm để xem/thu gọn
     if (safeItems.length > 0) {
       const safeLi = document.createElement('li');
       safeLi.textContent = `✓ ${safeItems.length} đặc điểm an toàn (Xem)`;
-      safeLi.style.backgroundColor = '#1a3a2a';
-      safeLi.style.color = '#00ff66';
-      safeLi.style.border = '1px solid #00ff6644';
-      safeLi.style.fontSize = '1.1rem';
-      safeLi.style.opacity = '0.85';
-      safeLi.style.cursor = 'pointer';
-      safeLi.style.textAlign = 'center';
+      safeLi.style.backgroundColor = '#1a3a2a'; safeLi.style.color = '#00ff66';
+      safeLi.style.border = '1px solid #00ff6644'; safeLi.style.fontSize = '1.1rem';
+      safeLi.style.opacity = '0.85'; safeLi.style.cursor = 'pointer'; safeLi.style.textAlign = 'center';
       safeLi.style.transition = 'all 0.2s ease';
-      
-      safeLi.addEventListener('mouseenter', () => {
-        safeLi.style.opacity = '1';
-        safeLi.style.backgroundColor = '#1e4630';
-      });
-      safeLi.addEventListener('mouseleave', () => {
-        safeLi.style.opacity = '0.85';
-        safeLi.style.backgroundColor = '#1a3a2a';
-      });
-
-      let expanded = false;
-      const renderedElements = [];
-
+      safeLi.addEventListener('mouseenter', () => { safeLi.style.opacity='1'; safeLi.style.backgroundColor='#1e4630'; });
+      safeLi.addEventListener('mouseleave', () => { safeLi.style.opacity='0.85'; safeLi.style.backgroundColor='#1a3a2a'; });
+      let expanded = false; const rendered = [];
       const toggleExpand = () => {
-        const parentContent = safeLi.closest('.feature-content');
+        const pc = safeLi.closest('.feature-content');
         if (!expanded) {
-          // Expand
           safeLi.textContent = `✓ ${safeItems.length} đặc điểm an toàn`;
-          
           safeItems.forEach(text => {
-            const itemLi = document.createElement('li');
-            itemLi.textContent = text;
-            itemLi.style.backgroundColor = '#28a745';
-            itemLi.style.color = '#fff';
-            itemLi.style.opacity = '0.85';
-            itemLi.style.fontSize = '1.0rem';
-            itemLi.style.border = '1px solid #28a74544';
-            featureList.appendChild(itemLi);
-            renderedElements.push(itemLi);
+            const il = document.createElement('li');
+            il.innerHTML = text;
+            il.style.backgroundColor='#28a745'; il.style.color='#fff'; il.style.opacity='0.85';
+            il.style.fontSize='1.0rem'; il.style.border='1px solid #28a74544';
+            featureList.appendChild(il); rendered.push(il);
           });
-          
-          // Append the collapse button
-          const collapseLi = document.createElement('li');
-          collapseLi.textContent = `Thu gọn`;
-          collapseLi.style.backgroundColor = '#374151';
-          collapseLi.style.color = '#e5e7eb';
-          collapseLi.style.border = '1px solid #4b5563';
-          collapseLi.style.fontSize = '1.1rem';
-          collapseLi.style.cursor = 'pointer';
-          collapseLi.style.textAlign = 'center';
-          collapseLi.style.opacity = '0.85';
-          
-          collapseLi.addEventListener('mouseenter', () => {
-            collapseLi.style.opacity = '1';
-            collapseLi.style.backgroundColor = '#4b5563';
-          });
-          collapseLi.addEventListener('mouseleave', () => {
-            collapseLi.style.opacity = '0.85';
-            collapseLi.style.backgroundColor = '#374151';
-          });
-          
-          collapseLi.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggleExpand();
-          });
-          
-          featureList.appendChild(collapseLi);
-          renderedElements.push(collapseLi);
-          
-          expanded = true;
+          const cl = document.createElement('li'); cl.textContent = 'Thu gọn';
+          cl.style.backgroundColor='#374151'; cl.style.color='#e5e7eb'; cl.style.border='1px solid #4b5563';
+          cl.style.fontSize='1.1rem'; cl.style.cursor='pointer'; cl.style.textAlign='center'; cl.style.opacity='0.85';
+          cl.addEventListener('mouseenter', () => { cl.style.opacity='1'; cl.style.backgroundColor='#4b5563'; });
+          cl.addEventListener('mouseleave', () => { cl.style.opacity='0.85'; cl.style.backgroundColor='#374151'; });
+          cl.addEventListener('click', (e) => { e.stopPropagation(); toggleExpand(); });
+          featureList.appendChild(cl); rendered.push(cl); expanded = true;
         } else {
-          // Collapse
-          renderedElements.forEach(el => {
-            if (el.parentNode) {
-              el.parentNode.removeChild(el);
-            }
-          });
-          renderedElements.length = 0;
-          safeLi.textContent = `✓ ${safeItems.length} đặc điểm an toàn (Xem)`;
-          expanded = false;
+          rendered.forEach(el => { if (el.parentNode) el.parentNode.removeChild(el); });
+          rendered.length = 0; safeLi.textContent = `✓ ${safeItems.length} đặc điểm an toàn (Xem)`; expanded = false;
         }
-
-        // Cập nhật lại chiều cao của panel cha để không bị khuất
-        if (parentContent && parentContent.style.maxHeight) {
-          parentContent.style.maxHeight = `${parentContent.scrollHeight}px`;
-        }
+        if (pc && pc.style.maxHeight) pc.style.maxHeight = `${pc.scrollHeight}px`;
       };
-
       safeLi.addEventListener('click', toggleExpand);
       featureList.appendChild(safeLi);
     }
@@ -203,101 +200,94 @@ const renderState = (state, domain) => {
 
   const pct = parseInt(legitimatePercent);
   const isValidPct = !isNaN(pct) && isFinite(pct);
+  const conf = (confidence != null && !isNaN(parseInt(confidence))) ? parseInt(confidence) : null;
 
-  const site_score     = document.getElementById('site_score');
-  const pct_content    = document.getElementById('percentage_content');
-  const site_msg       = document.getElementById('site_msg');
+  const site_score = document.getElementById('site_score');
+  const pct_content = document.getElementById('percentage_content');
+  const site_msg = document.getElementById('site_msg');
 
-  pct_content.classList.add(`p${isValidPct ? pct : 0}`);
+  // Class động cho vòng tròn % + trạng thái
+  const pctCls = `p${isValidPct ? pct : 0}`;
+  pct_content.classList.add(pctCls); _dynClasses.pct.push(pctCls);
+  if (isPhish) { pct_content.classList.add('orange'); _dynClasses.pct.push('orange'); }
 
   if (isPhish) {
-    pct_content.classList.add('orange');
-    site_score.classList.add('warning');
-    site_msg.classList.add('warning');
+    site_score.classList.add('warning'); _dynClasses.score.push('warning');
+    site_msg.classList.add('warning'); _dynClasses.msg.push('warning');
   } else {
-    site_score.classList.add('safe');
-    site_msg.classList.add('safe');
+    site_score.classList.add('safe'); _dynClasses.score.push('safe');
+    site_msg.classList.add('safe'); _dynClasses.msg.push('safe');
   }
 
-  // Thông báo trạng thái
+  // ── Thông báo trạng thái (confidence-gated — Vấn đề 10) ──
   let message;
-  if (status === 'OFFLINE') {
-    message = 'Không thể kết nối máy chủ phân tích.';
-  } else if (status === 'FAILED') {
-    message = 'Không thể phân tích trang này.';
-  } else {
-    message = isPhish ? 'Website này có thể không an toàn.' : 'Website này có thể an toàn.';
-  }
+  if (status === 'OFFLINE') message = 'Không thể kết nối máy chủ phân tích.';
+  else if (status === 'FAILED') message = 'Không thể phân tích trang này.';
+  else if (isUnknown) message = state.summary || 'Chưa đủ dữ liệu để đánh giá độ tin cậy.';
+  else if (state.summary) message = state.summary;
+  else message = isPhish ? 'Website này có thể không an toàn.' : 'Website này có thể an toàn.';
 
-  $('#site_msg').text(isValidPct ? message : '...');
-  $('#site_score').text(isValidPct ? `${pct - 1}%` : '...');
+  // Vòng tròn chỉ hiển thị % gọn gàng — KHÔNG nhồi confidence vào
+  $('#site_score').text(isValidPct ? `${pct}%` : '...');
+
+  // Confidence hiển thị dưới message (dòng phụ nhỏ, không thêm phần tử DOM mới)
+  if (isValidPct) {
+    const confLine = (conf != null && !isUnknown)
+      ? `<div style="font-size:0.72em;font-weight:400;opacity:0.65;margin-top:0.3rem;">Độ tin cậy: ${conf}%</div>`
+      : (isUnknown
+        ? `<div style="font-size:0.72em;font-weight:400;opacity:0.65;margin-top:0.3rem;">Độ tin cậy thấp — chưa đủ dữ liệu</div>`
+        : '');
+    $('#site_msg').html(message + confLine);
+  } else {
+    $('#site_msg').text('...');
+  }
   $('#domain_url').text(domain);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Main — lấy tab hiện tại → polling state từ storage.session
+// Main — polling LIÊN TỤC (dynamic score — Vấn đề 8, 9)
 // ─────────────────────────────────────────────────────────────────────────────
 chrome.tabs.query({ currentWindow: true, active: true }, ([tab]) => {
   if (!tab) return;
-
   const tabId = tab.id;
-  let url;
-  try {
-    url = new URL(tab.url);
-  } catch {
-    return;
-  }
+  let url; try { url = new URL(tab.url); } catch { return; }
   const domain = url.hostname;
 
-  // Không xử lý các trang không phải HTTP/HTTPS (chrome://, file://, v.v.)
   if (!['https:', 'http:'].includes(url.protocol)) {
-    $('#pluginBody').hide();
-    $('#domain_url').text(domain);
-    return;
+    $('#pluginBody').hide(); $('#domain_url').text(domain); return;
   }
 
-  // Hiển thị trạng thái mặc định trong khi chờ
-  $('#site_msg').text('Đang phân tích...');
-  $('#site_score').text('...');
-  $('#domain_url').text(domain);
+  $('#site_msg').text('Đang phân tích...'); $('#site_score').text('...'); $('#domain_url').text(domain);
 
   let attempts = 0;
+  let hasResult = false;
+  let lastUpdatedAt = 0;
 
   const poll = () => {
     chrome.runtime.sendMessage({ type: 'GET_TAB_STATE', tabId }, (state) => {
-      // Xử lý lỗi khi service worker đang khởi động lại
       if (chrome.runtime.lastError) {
-        if (attempts < POLL_MAX_ATTEMPTS) {
-          attempts++;
-          setTimeout(poll, POLL_INTERVAL_MS);
-        } else {
-          $('#site_msg').text('Tiện ích chưa sẵn sàng. Thử tải lại trang.');
-          $('#site_score').text('...');
-        }
+        if (attempts < POLL_MAX_ATTEMPTS) { attempts++; setTimeout(poll, POLL_INTERVAL_MS); }
+        else { $('#site_msg').text('Tiện ích chưa sẵn sàng. Thử tải lại trang.'); $('#site_score').text('...'); }
         return;
       }
 
-      // Còn đang phân tích → tiếp tục polling
-      const isStillAnalyzing = !state || state.status === 'ANALYZING' || state.status === 'IDLE';
-      if (isStillAnalyzing) {
-        if (attempts < POLL_MAX_ATTEMPTS) {
-          attempts++;
-          setTimeout(poll, POLL_INTERVAL_MS);
-        } else {
-          // Hết thời gian chờ — hiển thị kết quả nếu có, không thì báo lỗi
-          if (state && state.result) {
-            renderState(state, domain);
-          } else {
-            $('#site_msg').text('Trang chưa được phân tích. Thử tải lại trang.');
-            $('#site_score').text('...');
-            $('#domain_url').text(domain);
-          }
-        }
+      const stillAnalyzing = !state || state.status === 'ANALYZING' || state.status === 'IDLE';
+      if (stillAnalyzing) {
+        if (attempts < POLL_MAX_ATTEMPTS) { attempts++; setTimeout(poll, POLL_INTERVAL_MS); }
+        else if (state && state.result) { renderState(state, domain); hasResult = true; }
+        else { $('#site_msg').text('Trang chưa được phân tích. Thử tải lại trang.'); $('#site_score').text('...'); $('#domain_url').text(domain); }
         return;
       }
 
-      // Có kết quả (SUCCESS / FAILED / OFFLINE) → render UI ngay
-      renderState(state, domain);
+      // Có kết quả → render + TIẾP TỤC polling để cập nhật realtime
+      const updatedNow = state && state.updatedAt && state.updatedAt !== lastUpdatedAt;
+      if (updatedNow || !hasResult) {
+        renderState(state, domain);
+        lastUpdatedAt = state ? state.updatedAt : 0;
+        hasResult = true;
+      }
+      // Poll tiếp với nhịp chậm hơn để bắt ANALYSIS_UPDATE
+      setTimeout(poll, UPDATE_INTERVAL_MS);
     });
   };
 
