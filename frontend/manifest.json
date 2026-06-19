@@ -9,10 +9,7 @@
     "webRequest",
     "notifications",
     "declarativeNetRequest",
-    "downloads",
-    "contextMenus",
-    "scripting",
-    "activeTab"
+    "downloads"
   ],
   "host_permissions": [
     "*://*/*"
@@ -31,7 +28,6 @@
       ],
       "js": [
         "js/jquery.js",
-        "js/scan_platform.js",
         "js/features.js"
       ],
       "run_at": "document_idle"
