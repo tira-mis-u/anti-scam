@@ -13,7 +13,7 @@ const morgan = require('morgan');
 const axios = require('axios');
 const multer = require('multer');
 
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb');
 const dns = require('dns').promises;
 const crypto = require('crypto');
 const querystring = require('querystring');
@@ -41,8 +41,29 @@ const reportLimiter = rateLimit({
 
 const app = express();
 app.set('trust proxy', 1);
-// Enable CORS
+const isAdminRequestPath = (req) => req.path === '/admin' || req.path === '/admin/' || req.path.startsWith('/api/admin');
+
+// Do not expose admin endpoints to cross-origin preflight handled by the global CORS middleware.
+app.use((req, res, next) => {
+    if (isAdminRequestPath(req) && req.method === 'OPTIONS') return res.sendStatus(404);
+    next();
+});
+
+// Enable CORS for public extension APIs. Admin paths remove these headers below.
 app.use(cors());
+app.use((req, res, next) => {
+    if (isAdminRequestPath(req)) {
+        res.removeHeader('Access-Control-Allow-Origin');
+        res.removeHeader('Access-Control-Allow-Credentials');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('X-Frame-Options', 'DENY');
+        res.setHeader('Referrer-Policy', 'no-referrer');
+        res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+    }
+    next();
+});
 app.use(express.static('public'));
 
 // Enable the use of request body parsing middleware
@@ -65,6 +86,11 @@ app.use(morgan('combined', { stream: accessLogStream }))
 // Health check cho Render/Railway/VPS
 app.get('/', (req, res) => res.status(200).send({ ok: true, service: 'AntiScam API' }));
 app.get('/health', (req, res) => res.status(200).send({ ok: true, service: 'AntiScam API' }));
+app.get(['/admin', '/admin/'], (req, res) => {
+    if (process.env.ENABLE_ADMIN_UI !== 'true') return res.status(404).send('Not found');
+    if (!isAdminIpAllowed(req)) return res.status(403).send('Forbidden');
+    res.sendFile(path.join(__dirname, 'admin', 'index.html'));
+});
 
 // Classifier ML là tín hiệu phụ ở extension. Nếu chưa có model public trong backend,
 // trả về null để extension bỏ qua ML an toàn thay vì fail request /classifier.json.
@@ -95,10 +121,8 @@ const authenticateJWT = (req, res, next) => {
 };
 
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Threat intelligence helpers (server-side only). API keys are read from
 // environment variables, never from the browser extension.
-// ─────────────────────────────────────────────────────────────────────────────
 const getCfg = (pathName, fallback = null) => {
     try { return config.has(pathName) ? config.get(pathName) : fallback; } catch (_) { return fallback; }
 };
@@ -231,8 +255,9 @@ const getDnsIntel = async (domain, ip) => withTimeout((async () => {
 const getCommunityReportSummary = async (domain) => {
     try {
         if (!db) return { reportCount: 0 };
-        const count = await db.collection('reports').countDocuments({ domain, status: { $ne: 'rejected' } });
-        const latest = await db.collection('reports').find({ domain, status: { $ne: 'rejected' } }).sort({ createdAt: -1 }).limit(3).toArray();
+        const approvedQuery = { domain, status: 'approved' };
+        const count = await db.collection('reports').countDocuments(approvedQuery);
+        const latest = await db.collection('reports').find(approvedQuery).sort({ reviewedAt: -1, createdAt: -1 }).limit(3).toArray();
         return { reportCount: count, latest: latest.map(x => ({ category: x.category, description: x.description, time: x.createdAt })) };
     } catch (_) { return { reportCount: 0 }; }
 };
@@ -247,12 +272,34 @@ const REPORT_CATEGORIES = new Set([
     'other'
 ]);
 
+const firstHeaderValue = (value) => Array.isArray(value) ? value[0] : value;
+const normalizeClientIp = (value) => {
+    let ip = String(firstHeaderValue(value) || '').split(',')[0].trim();
+    if (!ip) return '';
+    ip = ip.replace(/^::ffff:/, '').trim();
+    if (ip.startsWith('[')) ip = ip.slice(1).split(']')[0];
+    return ip;
+};
 const getClientIp = (req) => {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) return String(forwarded).split(',')[0].trim();
-    return String(req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.ip || req.connection.remoteAddress || '')
-        .replace(/^::ffff:/, '')
-        .trim();
+    const candidates = [
+        req.headers['cf-connecting-ip'],
+        req.headers['x-real-ip'],
+        Array.isArray(req.ips) && req.ips.length ? req.ips[0] : '',
+        req.headers['x-forwarded-for'],
+        req.ip,
+        req.socket && req.socket.remoteAddress,
+        req.connection && req.connection.remoteAddress
+    ];
+    return candidates.map(normalizeClientIp).find(Boolean) || '';
+};
+const getAdminAllowedIps = () => String(process.env.ADMIN_ALLOWED_IPS || '')
+    .split(',')
+    .map(x => x.trim())
+    .filter(Boolean);
+const isAdminIpAllowed = (req) => {
+    const allowedIps = getAdminAllowedIps();
+    if (!allowedIps.length) return true;
+    return allowedIps.includes(getClientIp(req));
 };
 
 const isPrivateIp = (ip) => /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|::1|localhost)/.test(String(ip || ''));
@@ -299,6 +346,37 @@ const validateReportPayload = (body) => {
     return { url: parsed.href, domain, category, description };
 };
 
+const validateAdminReportPayload = (body) => {
+    const urlValue = String(body.url || '').trim();
+    let parsed;
+    try { parsed = new URL(/^https?:\/\//i.test(urlValue) ? urlValue : 'https://' + urlValue); }
+    catch (_) { return { error: 'URL không hợp lệ.' }; }
+    if (!['http:', 'https:'].includes(parsed.protocol)) return { error: 'URL không hợp lệ.' };
+    if (parsed.href.length > maxLengthUrl) return { error: 'URL quá dài.' };
+
+    const urlDomain = normalizeHostname(parsed.hostname);
+    const providedDomain = normalizeHostname(body.domain || '');
+    const domain = providedDomain || urlDomain;
+    if (!domain) return { error: 'Domain không hợp lệ.' };
+    if (providedDomain && providedDomain !== urlDomain && !urlDomain.endsWith('.' + providedDomain)) {
+        return { error: 'Domain phải trùng hostname của URL hoặc là domain cha của hostname.' };
+    }
+
+    const category = String(body.category || '').trim();
+    if (!REPORT_CATEGORIES.has(category)) return { error: 'Vui lòng chọn loại báo cáo.' };
+
+    const description = String(body.description || '').trim();
+    if (description.length < 5) return { error: 'Mô tả phải có tối thiểu 5 ký tự.' };
+    if (description.length > 1000) return { error: 'Mô tả không được vượt quá 1000 ký tự.' };
+
+    const manualAction = String(body.action || body.decision || 'pending').trim();
+    if (manualAction !== 'pending' && !ADMIN_DECISIONS.has(manualAction)) {
+        return { error: 'Action phải là pending, blacklist, whitelist hoặc pornlist.' };
+    }
+
+    return { url: parsed.href, domain, category, description, action: manualAction };
+};
+
 const saveReportScreenshot = async (file) => {
     if (!file) return '';
     const extMap = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/webp': '.webp' };
@@ -309,6 +387,259 @@ const saveReportScreenshot = async (file) => {
     const filename = `${Date.now()}-${crypto.randomBytes(12).toString('hex')}${ext === '.jpeg' ? '.jpg' : ext}`;
     await fs.promises.writeFile(path.join(uploadDir, filename), file.buffer);
     return `/report-screenshots/${filename}`;
+};
+
+// Admin authentication, moderation and list-management helpers.
+// Source code is public; only environment secrets, admin passwords and cookies
+// are private. Never put admin secrets in the browser extension/frontend.
+const ADMIN_COOKIE_NAME = process.env.ADMIN_COOKIE_NAME || 'admin_session';
+const ADMIN_SESSION_TTL_MS = Number(process.env.ADMIN_SESSION_TTL_MS || 8 * 60 * 60 * 1000);
+const isAdminApiEnabled = () => process.env.ENABLE_ADMIN_API === 'true';
+const ADMIN_ROLES = new Set(['admin', 'moderator', 'viewer']);
+const ADMIN_DECISIONS = new Set(['blacklist', 'whitelist', 'pornlist']);
+const adminLoginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Bạn đăng nhập sai quá nhiều lần. Vui lòng thử lại sau.' }
+});
+
+const parseCookies = (req) => {
+    const header = String(req.headers.cookie || '');
+    return header.split(';').reduce((acc, part) => {
+        const index = part.indexOf('=');
+        if (index === -1) return acc;
+        const key = part.slice(0, index).trim();
+        const value = part.slice(index + 1).trim();
+        if (!key) return acc;
+        try { acc[key] = decodeURIComponent(value); } catch (_) { acc[key] = value; }
+        return acc;
+    }, {});
+};
+const hashSessionToken = (token) => crypto.createHash('sha256').update(String(token || '')).digest('hex');
+const normalizeAdminEmail = (email) => String(email || '').trim().toLowerCase();
+const scryptAsync = (password, salt, keyLength, options) => new Promise((resolve, reject) => {
+    crypto.scrypt(password, salt, keyLength, options, (err, derivedKey) => err ? reject(err) : resolve(derivedKey));
+});
+const hashPassword = async (password) => {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const params = { N: 16384, r: 8, p: 1 };
+    const key = await scryptAsync(String(password), salt, 64, params);
+    return `scrypt$${params.N}$${params.r}$${params.p}$${salt}$${key.toString('hex')}`;
+};
+const verifyPassword = async (password, storedHash) => {
+    const parts = String(storedHash || '').split('$');
+    if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+    const [, N, r, p, salt, keyHex] = parts;
+    const expected = Buffer.from(keyHex, 'hex');
+    const actual = await scryptAsync(String(password), salt, expected.length, { N: Number(N), r: Number(r), p: Number(p) });
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+};
+const sanitizeAdmin = (admin) => admin ? ({
+    id: String(admin._id),
+    email: admin.email,
+    role: admin.role,
+    status: admin.status,
+    createdAt: admin.createdAt,
+    lastLoginAt: admin.lastLoginAt
+}) : null;
+const requireDb = (req, res, next) => {
+    if (!db) return res.status(status.SERVICE_UNAVAILABLE).send({ message: 'Database is not ready.' });
+    next();
+};
+const requireAdminApiEnabled = (req, res, next) => {
+    if (!isAdminApiEnabled()) return res.status(status.NOT_FOUND).send({ message: 'Not found' });
+    if (!isAdminIpAllowed(req)) return res.status(status.FORBIDDEN).send({ message: 'Forbidden' });
+    next();
+};
+const requireAdminCsrf = (req, res, next) => {
+    const providedToken = String(req.headers['x-csrf-token'] || '');
+    const expectedToken = String(req.adminSession && req.adminSession.csrfToken || '');
+    if (!providedToken || !expectedToken || providedToken !== expectedToken) {
+        return res.status(status.FORBIDDEN).send({ message: 'CSRF token không hợp lệ.' });
+    }
+    next();
+};
+const requireAdmin = async (req, res, next) => {
+    try {
+        if (!db) return res.status(status.SERVICE_UNAVAILABLE).send({ message: 'Database is not ready.' });
+        const cookies = parseCookies(req);
+        const token = cookies[ADMIN_COOKIE_NAME];
+        if (!token) return res.status(status.UNAUTHORIZED).send({ message: 'Unauthorized' });
+
+        const tokenHash = hashSessionToken(token);
+        const session = await db.collection('admin_sessions').findOne({
+            tokenHash,
+            revokedAt: null,
+            expiresAt: { $gt: new Date() }
+        });
+        if (!session) return res.status(status.UNAUTHORIZED).send({ message: 'Session expired' });
+
+        const admin = await db.collection('admin_users').findOne({ _id: session.adminId, status: 'active' });
+        if (!admin) return res.status(status.FORBIDDEN).send({ message: 'Admin disabled' });
+
+        req.admin = sanitizeAdmin(admin);
+        req.adminRaw = admin;
+        req.adminSession = session;
+        db.collection('admin_sessions').updateOne({ _id: session._id }, { $set: { lastSeenAt: new Date() } }).catch(() => {});
+        next();
+    } catch (err) {
+        console.log('admin auth error', err && err.message);
+        res.status(status.UNAUTHORIZED).send({ message: 'Unauthorized' });
+    }
+};
+const requireRole = (...roles) => (req, res, next) => {
+    if (!req.admin || !roles.includes(req.admin.role)) return res.status(status.FORBIDDEN).send({ message: 'Forbidden' });
+    next();
+};
+const writeAuditLog = async (req, action, targetType, targetId, metadata = {}) => {
+    try {
+        if (!db) return;
+        await db.collection('audit_logs').insertOne({
+            adminId: req.adminRaw && req.adminRaw._id,
+            adminEmail: req.admin && req.admin.email,
+            action,
+            targetType,
+            targetId,
+            metadata,
+            ip: getClientIp(req),
+            userAgent: String(req.headers['user-agent'] || '').slice(0, 500),
+            createdAt: new Date()
+        });
+    } catch (err) {
+        console.log('audit log error', err && err.message);
+    }
+};
+const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const parsePositiveInt = (value, fallback, max = 200) => {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(parsed, max);
+};
+const objectIdFromParam = (value) => ObjectId.isValid(String(value || '')) ? new ObjectId(String(value)) : null;
+const getActiveListFilter = () => ({ $or: [{ status: { $exists: false } }, { status: 'active' }] });
+
+const bootstrapInitialAdmin = async () => {
+    const count = await db.collection('admin_users').countDocuments({});
+    if (count > 0) return;
+
+    const email = normalizeAdminEmail(process.env.ADMIN_EMAIL || process.env.ADMIN_INITIAL_EMAIL);
+    const password = process.env.ADMIN_PASSWORD || process.env.ADMIN_INITIAL_PASSWORD;
+    if (!email || !password) {
+        console.warn('No admin user exists. Set ADMIN_EMAIL and ADMIN_PASSWORD once to bootstrap the first admin.');
+        return;
+    }
+    if (String(password).length < 12) {
+        console.warn('ADMIN_PASSWORD must be at least 12 characters. Initial admin was not created.');
+        return;
+    }
+
+    const now = new Date();
+    await db.collection('admin_users').insertOne({
+        email,
+        passwordHash: await hashPassword(password),
+        role: 'admin',
+        status: 'active',
+        source: 'env-bootstrap',
+        createdAt: now,
+        updatedAt: now
+    });
+    console.info('Bootstrapped initial admin user:', email);
+};
+
+const buildListPayload = (body, type, actorSource = 'manual-admin') => {
+    const rawUrl = String(body.url || body.domain || '').trim();
+    const domain = normalizeHostname(rawUrl);
+    if (!domain) return { error: 'URL/domain không hợp lệ.' };
+    const url = rawUrl || domain;
+    return {
+        url,
+        domain,
+        type,
+        status: ['active', 'inactive'].includes(String(body.status || '').trim()) ? String(body.status).trim() : 'active',
+        source: String(body.source || actorSource).slice(0, 80),
+        reason: String(body.reason || body.reviewNote || '').slice(0, 500)
+    };
+};
+
+const approveReportDocument = async (req, report, decision, reviewNote = '') => {
+    const now = new Date();
+    const listUrl = String(report.url || report.domain || '').trim();
+    const listDomain = normalizeHostname(report.domain || listUrl);
+    if (!listDomain) throw new Error('INVALID_REPORT_DOMAIN');
+
+    const listResult = await db.collection(decision).updateOne(
+        { domain: listDomain },
+        {
+            $set: {
+                url: listUrl || listDomain,
+                domain: listDomain,
+                type: decision,
+                status: 'active',
+                source: report.source === 'manual-admin' ? 'manual-admin-report' : 'community-report',
+                reason: reviewNote || report.description || '',
+                updatedBy: req.admin.email,
+                updatedAt: now
+            },
+            $addToSet: { evidenceReportIds: report._id },
+            $setOnInsert: { createdAt: now, createdBy: req.admin.email }
+        },
+        { upsert: true }
+    );
+    const listEntry = await db.collection(decision).findOne({ domain: listDomain });
+    await db.collection('reports').updateOne(
+        { _id: report._id },
+        {
+            $set: {
+                status: 'approved',
+                decision,
+                reviewedBy: req.admin.email,
+                reviewedById: req.adminRaw._id,
+                reviewedAt: now,
+                reviewNote,
+                listEntryId: listEntry && listEntry._id,
+                updatedAt: now
+            }
+        }
+    );
+    return { listEntry, listResult, domain: listDomain };
+};
+
+const importListHandler = async (req, res) => {
+    const type = String(req.params.typelist || '').trim();
+    if (!isValidListType(type)) return res.status(status.BAD_REQUEST).send(`${type} is not a valid type of list`);
+    if (!req.file || !req.file.buffer) return res.status(status.BAD_REQUEST).send({ message: 'file is required' });
+
+    let parsed;
+    try { parsed = JSON.parse(req.file.buffer.toString()); }
+    catch (_) { return res.status(status.BAD_REQUEST).send({ message: 'File JSON không hợp lệ.' }); }
+
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    const normalizedRows = rows.map(item => normalizeListDocument({ ...(typeof item === 'string' ? { url: item } : item), source: (item && item.source) || 'admin-import' }, type)).filter(Boolean);
+    const chunkData = chunkArray(normalizedRows, 1000);
+    let upserted = 0;
+
+    for (let i = 0; i < chunkData.length; i++) {
+        try {
+            const ops = chunkData[i].map(item => ({
+                updateOne: {
+                    filter: { domain: item.domain },
+                    update: { $set: { ...item, updatedAt: new Date() }, $setOnInsert: { createdAt: item.createdAt || new Date() } },
+                    upsert: true
+                }
+            }));
+            if (ops.length) {
+                const result = await db.collection(type).bulkWrite(ops, { ordered: false });
+                upserted += (result.upsertedCount || 0) + (result.modifiedCount || 0);
+            }
+        } catch(err) {
+            console.log(`${type} import error`, err && err.message);
+        }
+    }
+
+    await writeAuditLog(req, 'import_list', type, null, { type, received: rows.length, valid: normalizedRows.length, upserted });
+    res.status(status.OK).send({ message: 'INSERT SUCCESS', type, received: rows.length, valid: normalizedRows.length, upserted });
 };
 
 app.post(`/${APP_VERSION}/initSession`, (req, res) => {
@@ -520,6 +851,415 @@ app.post('/api/report', reportLimiter, function(req, res, next) {
     }
 });
 
+// Admin API. The UI at /admin uses these endpoints through httpOnly cookies.
+app.use('/api/admin', requireAdminApiEnabled);
+
+app.post('/api/admin/login', adminLoginLimiter, requireDb, async (req, res) => {
+    try {
+        const email = normalizeAdminEmail(req.body && req.body.email);
+        const password = String(req.body && req.body.password || '');
+        if (!email || !password) return res.status(status.UNAUTHORIZED).send({ message: 'Email hoặc mật khẩu không đúng.' });
+
+        const admin = await db.collection('admin_users').findOne({ email, status: 'active' });
+        if (!admin || !(await verifyPassword(password, admin.passwordHash))) {
+            return res.status(status.UNAUTHORIZED).send({ message: 'Email hoặc mật khẩu không đúng.' });
+        }
+
+        const rawToken = crypto.randomBytes(32).toString('base64url');
+        const csrfToken = crypto.randomBytes(32).toString('base64url');
+        const tokenHash = hashSessionToken(rawToken);
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + ADMIN_SESSION_TTL_MS);
+        const sessionDoc = {
+            adminId: admin._id,
+            tokenHash,
+            csrfToken,
+            ip: getClientIp(req),
+            userAgent: String(req.headers['user-agent'] || '').slice(0, 500),
+            createdAt: now,
+            lastSeenAt: now,
+            expiresAt,
+            revokedAt: null
+        };
+        await db.collection('admin_sessions').insertOne(sessionDoc);
+        await db.collection('admin_users').updateOne({ _id: admin._id }, { $set: { lastLoginAt: now, updatedAt: now } });
+
+        const cookieSecure = process.env.ADMIN_COOKIE_SECURE ? process.env.ADMIN_COOKIE_SECURE === 'true' : process.env.NODE_ENV === 'production';
+        res.cookie(ADMIN_COOKIE_NAME, rawToken, {
+            httpOnly: true,
+            secure: cookieSecure,
+            sameSite: 'strict',
+            maxAge: ADMIN_SESSION_TTL_MS,
+            path: '/'
+        });
+        await writeAuditLog({ headers: req.headers, ips: req.ips, ip: req.ip, socket: req.socket, connection: req.connection, admin: sanitizeAdmin(admin), adminRaw: admin }, 'admin_login', 'admin_user', admin._id, {});
+        res.status(status.OK).send({ ok: true, admin: sanitizeAdmin(admin), csrfToken, expiresAt });
+    } catch (err) {
+        console.log('admin login error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể đăng nhập.' });
+    }
+});
+
+app.post('/api/admin/logout', requireAdmin, requireAdminCsrf, async (req, res) => {
+    try {
+        if (req.adminSession) {
+            await db.collection('admin_sessions').updateOne({ _id: req.adminSession._id }, { $set: { revokedAt: new Date() } });
+        }
+        await writeAuditLog(req, 'admin_logout', 'admin_user', req.adminRaw && req.adminRaw._id, {});
+        res.clearCookie(ADMIN_COOKIE_NAME, { path: '/' });
+        res.status(status.OK).send({ ok: true });
+    } catch (err) {
+        console.log('admin logout error', err && err.message);
+        res.status(status.OK).send({ ok: true });
+    }
+});
+
+app.get('/api/admin/me', requireAdmin, (req, res) => {
+    res.status(status.OK).send({ ok: true, admin: req.admin, csrfToken: req.adminSession && req.adminSession.csrfToken });
+});
+
+app.get('/api/admin/users', requireAdmin, requireRole('admin'), async (req, res) => {
+    const users = await db.collection('admin_users')
+        .find({})
+        .project({ passwordHash: 0 })
+        .sort({ createdAt: -1 })
+        .toArray();
+    res.status(status.OK).send({ items: users });
+});
+
+app.post('/api/admin/users', requireAdmin, requireAdminCsrf, requireRole('admin'), async (req, res) => {
+    try {
+        const email = normalizeAdminEmail(req.body && req.body.email);
+        const password = String(req.body && req.body.password || '');
+        const role = String(req.body && req.body.role || 'moderator').trim();
+        if (!email || !email.includes('@')) return res.status(status.BAD_REQUEST).send({ message: 'Email không hợp lệ.' });
+        if (!ADMIN_ROLES.has(role)) return res.status(status.BAD_REQUEST).send({ message: 'Role không hợp lệ.' });
+        if (password.length < 12) return res.status(status.BAD_REQUEST).send({ message: 'Mật khẩu phải có tối thiểu 12 ký tự.' });
+        const now = new Date();
+        const doc = {
+            email,
+            passwordHash: await hashPassword(password),
+            role,
+            status: 'active',
+            createdBy: req.admin.email,
+            createdAt: now,
+            updatedAt: now
+        };
+        await db.collection('admin_users').insertOne(doc);
+        await writeAuditLog(req, 'create_admin_user', 'admin_user', doc._id, { email, role });
+        delete doc.passwordHash;
+        res.status(status.OK).send({ ok: true, item: doc });
+    } catch (err) {
+        if (err && err.code === 11000) return res.status(status.CONFLICT).send({ message: 'Email admin đã tồn tại.' });
+        console.log('create admin user error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể tạo admin user.' });
+    }
+});
+
+app.patch('/api/admin/users/:id', requireAdmin, requireAdminCsrf, requireRole('admin'), async (req, res) => {
+    try {
+        const _id = objectIdFromParam(req.params.id);
+        if (!_id) return res.status(status.BAD_REQUEST).send({ message: 'ID không hợp lệ.' });
+        const updates = { updatedAt: new Date(), updatedBy: req.admin.email };
+        if ('role' in req.body) {
+            const role = String(req.body.role || '').trim();
+            if (!ADMIN_ROLES.has(role)) return res.status(status.BAD_REQUEST).send({ message: 'Role không hợp lệ.' });
+            updates.role = role;
+        }
+        if ('status' in req.body) {
+            const nextStatus = String(req.body.status || '').trim();
+            if (!['active', 'disabled'].includes(nextStatus)) return res.status(status.BAD_REQUEST).send({ message: 'Status không hợp lệ.' });
+            if (String(_id) === String(req.adminRaw._id) && nextStatus === 'disabled') return res.status(status.BAD_REQUEST).send({ message: 'Không thể tự disable tài khoản đang đăng nhập.' });
+            updates.status = nextStatus;
+        }
+        if ('password' in req.body && String(req.body.password || '')) {
+            const password = String(req.body.password || '');
+            if (password.length < 12) return res.status(status.BAD_REQUEST).send({ message: 'Mật khẩu phải có tối thiểu 12 ký tự.' });
+            updates.passwordHash = await hashPassword(password);
+            updates.passwordChangedAt = new Date();
+        }
+        const shouldRevokeSessions = !!(updates.passwordHash || updates.status === 'disabled' || updates.role);
+        const result = await db.collection('admin_users').updateOne({ _id }, { $set: updates });
+        if (!result.matchedCount) return res.status(status.NOT_FOUND).send({ message: 'Không tìm thấy admin user.' });
+        if (shouldRevokeSessions) {
+            await db.collection('admin_sessions').updateMany(
+                { adminId: _id, revokedAt: null },
+                { $set: { revokedAt: new Date(), revokeReason: 'admin_user_updated' } }
+            );
+        }
+        const item = await db.collection('admin_users').findOne({ _id }, { projection: { passwordHash: 0 } });
+        await writeAuditLog(req, 'update_admin_user', 'admin_user', _id, { updates: { ...updates, passwordHash: updates.passwordHash ? '[changed]' : undefined } });
+        res.status(status.OK).send({ ok: true, item });
+    } catch (err) {
+        console.log('update admin user error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể cập nhật admin user.' });
+    }
+});
+
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
+    try {
+        const [pendingReports, approvedReports, rejectedReports, blacklistCount, whitelistCount, pornlistCount] = await Promise.all([
+            db.collection('reports').countDocuments({ status: 'pending' }),
+            db.collection('reports').countDocuments({ status: 'approved' }),
+            db.collection('reports').countDocuments({ status: 'rejected' }),
+            db.collection('blacklist').countDocuments(getActiveListFilter()),
+            db.collection('whitelist').countDocuments(getActiveListFilter()),
+            db.collection('pornlist').countDocuments(getActiveListFilter())
+        ]);
+        res.status(status.OK).send({ pendingReports, approvedReports, rejectedReports, blacklistCount, whitelistCount, pornlistCount });
+    } catch (err) {
+        console.log('admin stats error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể lấy thống kê.' });
+    }
+});
+
+app.get('/api/admin/audit-logs', requireAdmin, requireRole('admin'), async (req, res) => {
+    try {
+        const limit = parsePositiveInt(req.query.limit, 50, 200);
+        const page = parsePositiveInt(req.query.page, 1, 100000);
+        const search = String(req.query.search || '').trim();
+        const filter = {};
+        if (search) {
+            const regex = new RegExp(escapeRegex(search), 'i');
+            filter.$or = [{ action: regex }, { adminEmail: regex }, { targetType: regex }];
+        }
+        const [total, items] = await Promise.all([
+            db.collection('audit_logs').countDocuments(filter),
+            db.collection('audit_logs').find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).toArray()
+        ]);
+        res.status(status.OK).send({ total, page, limit, items });
+    } catch (err) {
+        console.log('admin audit logs error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể lấy audit logs.' });
+    }
+});
+
+app.get('/api/admin/reports', requireAdmin, async (req, res) => {
+    try {
+        const limit = parsePositiveInt(req.query.limit, 25, 100);
+        const page = parsePositiveInt(req.query.page, 1, 100000);
+        const reportStatus = String(req.query.status || 'pending').trim();
+        const search = String(req.query.search || '').trim();
+        const filter = {};
+        if (reportStatus && reportStatus !== 'all') filter.status = reportStatus;
+        if (search) {
+            const regex = new RegExp(escapeRegex(search), 'i');
+            filter.$or = [{ url: regex }, { domain: regex }, { description: regex }, { category: regex }];
+        }
+        const [total, items] = await Promise.all([
+            db.collection('reports').countDocuments(filter),
+            db.collection('reports').find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).toArray()
+        ]);
+        res.status(status.OK).send({ total, page, limit, items });
+    } catch (err) {
+        console.log('admin reports error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể lấy danh sách báo cáo.' });
+    }
+});
+
+app.post('/api/admin/reports', requireAdmin, requireAdminCsrf, requireRole('admin', 'moderator'), async (req, res) => {
+    try {
+        const validated = validateAdminReportPayload(req.body || {});
+        if (validated.error) return res.status(status.BAD_REQUEST).send({ message: validated.error });
+
+        const now = new Date();
+        const report = {
+            url: validated.url,
+            domain: validated.domain,
+            category: validated.category,
+            description: validated.description,
+            screenshotUrl: '',
+            status: 'pending',
+            decision: '',
+            source: 'manual-admin',
+            submittedBy: 'admin',
+            createdBy: req.admin.email,
+            createdById: req.adminRaw._id,
+            adminIp: getClientIp(req),
+            ip: '',
+            country: '',
+            region: '',
+            city: '',
+            deviceFingerprint: crypto.createHash('sha256').update(`manual-admin|${req.adminRaw._id}|${validated.url}|${Date.now()}|${crypto.randomBytes(8).toString('hex')}`).digest('hex'),
+            extensionVersion: 'admin-panel',
+            browserName: 'admin-panel',
+            browserLanguage: String(req.body.browserLanguage || '').slice(0, 40),
+            userAgent: String(req.headers['user-agent'] || '').slice(0, 500),
+            pageTitle: String(req.body.pageTitle || '').slice(0, 300),
+            clientTimestamp: null,
+            createdAt: now,
+            updatedAt: now
+        };
+
+        await db.collection('reports').insertOne(report);
+        let approval = null;
+        if (validated.action !== 'pending') {
+            approval = await approveReportDocument(req, report, validated.action, String(req.body.reviewNote || req.body.description || '').slice(0, 1000));
+        }
+        await writeAuditLog(req, 'create_manual_report', 'report', report._id, { domain: report.domain, action: validated.action, category: report.category });
+        const savedReport = await db.collection('reports').findOne({ _id: report._id });
+        res.status(status.OK).send({ ok: true, report: savedReport, listEntry: approval && approval.listEntry });
+    } catch (err) {
+        console.log('admin create report error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể tạo báo cáo thủ công.' });
+    }
+});
+
+app.get('/api/admin/reports/:id', requireAdmin, async (req, res) => {
+    const _id = objectIdFromParam(req.params.id);
+    if (!_id) return res.status(status.BAD_REQUEST).send({ message: 'ID không hợp lệ.' });
+    const report = await db.collection('reports').findOne({ _id });
+    if (!report) return res.status(status.NOT_FOUND).send({ message: 'Không tìm thấy báo cáo.' });
+    res.status(status.OK).send(report);
+});
+
+app.patch('/api/admin/reports/:id/approve', requireAdmin, requireAdminCsrf, requireRole('admin', 'moderator'), async (req, res) => {
+    try {
+        const _id = objectIdFromParam(req.params.id);
+        if (!_id) return res.status(status.BAD_REQUEST).send({ message: 'ID không hợp lệ.' });
+        const decision = String(req.body.decision || '').trim();
+        if (!ADMIN_DECISIONS.has(decision)) return res.status(status.BAD_REQUEST).send({ message: 'Decision phải là blacklist, whitelist hoặc pornlist.' });
+
+        const report = await db.collection('reports').findOne({ _id });
+        if (!report) return res.status(status.NOT_FOUND).send({ message: 'Không tìm thấy báo cáo.' });
+
+        const reviewNote = String(req.body.reviewNote || req.body.note || '').slice(0, 1000);
+        let approval;
+        try { approval = await approveReportDocument(req, report, decision, reviewNote); }
+        catch (err) {
+            if (err && err.message === 'INVALID_REPORT_DOMAIN') return res.status(status.BAD_REQUEST).send({ message: 'Domain của báo cáo không hợp lệ.' });
+            throw err;
+        }
+        await writeAuditLog(req, 'approve_report', 'report', report._id, { decision, domain: approval.domain, listUpsertedId: approval.listResult.upsertedId || null, reviewNote });
+        const updatedReport = await db.collection('reports').findOne({ _id });
+        res.status(status.OK).send({ ok: true, report: updatedReport, listEntry: approval.listEntry });
+    } catch (err) {
+        console.log('admin approve report error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể duyệt báo cáo.' });
+    }
+});
+
+app.patch('/api/admin/reports/:id/reject', requireAdmin, requireAdminCsrf, requireRole('admin', 'moderator'), async (req, res) => {
+    try {
+        const _id = objectIdFromParam(req.params.id);
+        if (!_id) return res.status(status.BAD_REQUEST).send({ message: 'ID không hợp lệ.' });
+        const now = new Date();
+        const reviewNote = String(req.body.reviewNote || req.body.note || '').slice(0, 1000);
+        const result = await db.collection('reports').updateOne(
+            { _id },
+            { $set: { status: 'rejected', decision: 'no_action', reviewedBy: req.admin.email, reviewedById: req.adminRaw._id, reviewedAt: now, reviewNote, updatedAt: now } }
+        );
+        if (!result.matchedCount) return res.status(status.NOT_FOUND).send({ message: 'Không tìm thấy báo cáo.' });
+        await writeAuditLog(req, 'reject_report', 'report', _id, { reviewNote });
+        res.status(status.OK).send({ ok: true });
+    } catch (err) {
+        console.log('admin reject report error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể từ chối báo cáo.' });
+    }
+});
+
+app.patch('/api/admin/reports/:id/status', requireAdmin, requireAdminCsrf, requireRole('admin', 'moderator'), async (req, res) => {
+    const _id = objectIdFromParam(req.params.id);
+    if (!_id) return res.status(status.BAD_REQUEST).send({ message: 'ID không hợp lệ.' });
+    const nextStatus = String(req.body.status || '').trim();
+    if (!['pending', 'under_review', 'duplicate'].includes(nextStatus)) return res.status(status.BAD_REQUEST).send({ message: 'Status không hợp lệ.' });
+    const now = new Date();
+    const reviewNote = String(req.body.reviewNote || req.body.note || '').slice(0, 1000);
+    const result = await db.collection('reports').updateOne({ _id }, { $set: { status: nextStatus, reviewNote, reviewedBy: req.admin.email, reviewedById: req.adminRaw._id, reviewedAt: now, updatedAt: now } });
+    if (!result.matchedCount) return res.status(status.NOT_FOUND).send({ message: 'Không tìm thấy báo cáo.' });
+    await writeAuditLog(req, 'update_report_status', 'report', _id, { status: nextStatus, reviewNote });
+    res.status(status.OK).send({ ok: true });
+});
+
+app.get('/api/admin/lists/:type', requireAdmin, async (req, res) => {
+    try {
+        const type = String(req.params.type || '').trim();
+        if (!isValidListType(type)) return res.status(status.BAD_REQUEST).send({ message: 'List type không hợp lệ.' });
+        const limit = parsePositiveInt(req.query.limit, 50, 200);
+        const page = parsePositiveInt(req.query.page, 1, 100000);
+        const listStatus = String(req.query.status || 'active').trim();
+        const search = String(req.query.search || '').trim();
+        const filter = {};
+        if (listStatus === 'active') Object.assign(filter, getActiveListFilter());
+        else if (listStatus !== 'all') filter.status = listStatus;
+        if (search) {
+            const regex = new RegExp(escapeRegex(search), 'i');
+            filter.$and = filter.$and || [];
+            filter.$and.push({ $or: [{ url: regex }, { domain: regex }, { reason: regex }, { source: regex }] });
+        }
+        const [total, items] = await Promise.all([
+            db.collection(type).countDocuments(filter),
+            db.collection(type).find(filter).sort({ updatedAt: -1, createdAt: -1 }).skip((page - 1) * limit).limit(limit).toArray()
+        ]);
+        res.status(status.OK).send({ total, page, limit, items });
+    } catch (err) {
+        console.log('admin list get error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể lấy danh sách.' });
+    }
+});
+
+app.post('/api/admin/lists/:type', requireAdmin, requireAdminCsrf, requireRole('admin', 'moderator'), async (req, res) => {
+    try {
+        const type = String(req.params.type || '').trim();
+        if (!isValidListType(type)) return res.status(status.BAD_REQUEST).send({ message: 'List type không hợp lệ.' });
+        const payload = buildListPayload(req.body || {}, type, 'manual-admin');
+        if (payload.error) return res.status(status.BAD_REQUEST).send({ message: payload.error });
+        const now = new Date();
+        const result = await db.collection(type).updateOne(
+            { domain: payload.domain },
+            { $set: { ...payload, updatedBy: req.admin.email, updatedAt: now }, $setOnInsert: { createdAt: now, createdBy: req.admin.email } },
+            { upsert: true }
+        );
+        const item = await db.collection(type).findOne({ domain: payload.domain });
+        await writeAuditLog(req, 'upsert_list_entry', type, item && item._id, { type, domain: payload.domain, upsertedId: result.upsertedId || null });
+        res.status(status.OK).send({ ok: true, item });
+    } catch (err) {
+        if (err && err.code === 11000) return res.status(status.CONFLICT).send({ message: 'URL/domain đã tồn tại.' });
+        console.log('admin list post error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể lưu domain.' });
+    }
+});
+
+app.patch('/api/admin/lists/:type/:id', requireAdmin, requireAdminCsrf, requireRole('admin', 'moderator'), async (req, res) => {
+    try {
+        const type = String(req.params.type || '').trim();
+        const _id = objectIdFromParam(req.params.id);
+        if (!isValidListType(type) || !_id) return res.status(status.BAD_REQUEST).send({ message: 'Tham số không hợp lệ.' });
+        const updates = {};
+        if ('url' in req.body || 'domain' in req.body) {
+            const payload = buildListPayload({ ...req.body, url: req.body.url || req.body.domain }, type, 'manual-admin');
+            if (payload.error) return res.status(status.BAD_REQUEST).send({ message: payload.error });
+            Object.assign(updates, { url: payload.url, domain: payload.domain, type: payload.type });
+        }
+        if ('status' in req.body && ['active', 'inactive'].includes(String(req.body.status))) updates.status = String(req.body.status);
+        if ('reason' in req.body) updates.reason = String(req.body.reason || '').slice(0, 500);
+        if ('source' in req.body) updates.source = String(req.body.source || '').slice(0, 80);
+        updates.updatedAt = new Date();
+        updates.updatedBy = req.admin.email;
+        const result = await db.collection(type).updateOne({ _id }, { $set: updates });
+        if (!result.matchedCount) return res.status(status.NOT_FOUND).send({ message: 'Không tìm thấy item.' });
+        const item = await db.collection(type).findOne({ _id });
+        await writeAuditLog(req, 'update_list_entry', type, _id, { updates });
+        res.status(status.OK).send({ ok: true, item });
+    } catch (err) {
+        if (err && err.code === 11000) return res.status(status.CONFLICT).send({ message: 'URL/domain đã tồn tại.' });
+        console.log('admin list patch error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể cập nhật item.' });
+    }
+});
+
+app.delete('/api/admin/lists/:type/:id', requireAdmin, requireAdminCsrf, requireRole('admin'), async (req, res) => {
+    const type = String(req.params.type || '').trim();
+    const _id = objectIdFromParam(req.params.id);
+    if (!isValidListType(type) || !_id) return res.status(status.BAD_REQUEST).send({ message: 'Tham số không hợp lệ.' });
+    const result = await db.collection(type).updateOne({ _id }, { $set: { status: 'inactive', updatedAt: new Date(), updatedBy: req.admin.email } });
+    if (!result.matchedCount) return res.status(status.NOT_FOUND).send({ message: 'Không tìm thấy item.' });
+    await writeAuditLog(req, 'disable_list_entry', type, _id, {});
+    res.status(status.OK).send({ ok: true });
+});
+
+app.post('/api/admin/import/:typelist', requireAdmin, requireAdminCsrf, requireRole('admin', 'moderator'), upload.single('file'), importListHandler);
+
 /**
  * The route to get blacklist or whitelist sites from DB
  * this is public so the request shouldn't be authenticated
@@ -572,38 +1312,8 @@ app.post(`/${APP_VERSION}/res/:resId`, authenticateJWT, function(req, res) {
     });
 });
 
-app.post(`/${APP_VERSION}/importFiles/:typelist`,  upload.single('file'), async (req, res) => {
-    const type = String(req.params.typelist || '').trim();
-    if (!isValidListType(type)) return res.status(status.BAD_REQUEST).send(`${type} is not a valid type of list`);
-    if (!req.file || !req.file.buffer) return res.status(status.BAD_REQUEST).send({ message: 'file is required' });
-
-    const rawData = req.file.buffer.toString();
-    const parsed = JSON.parse(rawData);
-    const rows = Array.isArray(parsed) ? parsed : [parsed];
-    const normalizedRows = rows.map(item => normalizeListDocument(item, type)).filter(Boolean);
-    const chunkData = chunkArray(normalizedRows, 1000);
-    let upserted = 0;
-
-    for (let i = 0; i < chunkData.length; i++) {
-        try {
-            const ops = chunkData[i].map(item => ({
-                updateOne: {
-                    filter: { url: item.url },
-                    update: { $set: { ...item, updatedAt: new Date() }, $setOnInsert: { createdAt: item.createdAt || new Date() } },
-                    upsert: true
-                }
-            }));
-            if (ops.length) {
-                const result = await db.collection(type).bulkWrite(ops, { ordered: false });
-                upserted += (result.upsertedCount || 0) + (result.modifiedCount || 0);
-            }
-        } catch(err) {
-            console.log(`${type} import error`, err && err.message);
-        }
-    }
-
-    res.status(status.OK).send({ message: 'INSERT SUCCESS', type, received: rows.length, valid: normalizedRows.length, upserted });
-})
+// Legacy import route is now admin-only. Prefer /api/admin/import/:typelist from the admin UI.
+app.post(`/${APP_VERSION}/importFiles/:typelist`, requireAdmin, requireAdminCsrf, requireRole('admin', 'moderator'), upload.single('file'), importListHandler);
 
 app.post(`/${APP_VERSION}/safecheck`, function(req, res) {
     let { url } = req.body;
@@ -611,7 +1321,7 @@ app.post(`/${APP_VERSION}/safecheck`, function(req, res) {
     if(!url || url.length > maxLengthUrl) {
         return res.sendStatus(status.BAD_REQUEST);
     }
-    db.collection('blacklist').find().toArray().then(result => {
+    db.collection('blacklist').find(getActiveListFilter()).toArray().then(result => {
         // Check if current url exist in our Blacklist :
         for(let blacksite of result) {
             let site = blacksite.url.replace('https://', '').replace('http://', '').replace('www.', '')
@@ -640,7 +1350,7 @@ app.post(`/${APP_VERSION}/safecheck`, function(req, res) {
                 return res.status(status.OK).send({type: "unsafe"});
         }
 
-        db.collection('whitelist').find({url: {'$regex': url, '$options': 'i'}}).toArray().then(result => {
+        db.collection('whitelist').find({ $and: [getActiveListFilter(), { url: {'$regex': url, '$options': 'i'} }] }).toArray().then(result => {
             if(result.length > 0) {
                 res.status(status.OK).send({type: "safe"});
             } else {
@@ -1004,18 +1714,34 @@ const mongoClient = new MongoClient(mongoUrl, {
     serverSelectionTimeoutMS: Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || 15000)
 });
 
+const ensureCollection = async (collectionName) => {
+    const existing = await db.listCollections({ name: collectionName }, { nameOnly: true }).toArray();
+    if (!existing.length) await db.createCollection(collectionName);
+};
+
 async function startServer() {
     try {
         await mongoClient.connect();
 
         db = mongoClient.db(getMongoDatabaseName());
+        console.info('Connected to MongoDB database:', db.databaseName);
+        for (const collectionName of ['reports', 'rating', 'blacklist', 'whitelist', 'pornlist', 'admin_users', 'admin_sessions', 'audit_logs']) {
+            await ensureCollection(collectionName).catch(err => console.log(`${collectionName} collection error`, err && err.message));
+        }
         await db.collection('reports').createIndex({ deviceFingerprint: 1, domain: 1 }, { unique: true }).catch(err => console.log('reports index error', err && err.message));
         await db.collection('reports').createIndex({ domain: 1, createdAt: -1 }).catch(err => console.log('reports domain index error', err && err.message));
+        await db.collection('reports').createIndex({ status: 1, createdAt: -1 }).catch(err => console.log('reports status index error', err && err.message));
         for (const type of ['blacklist', 'whitelist', 'pornlist']) {
             await db.collection(type).createIndex({ url: 1 }, { unique: true, sparse: true }).catch(err => console.log(`${type} url index error`, err && err.message));
             await db.collection(type).createIndex({ domain: 1, status: 1 }).catch(err => console.log(`${type} domain index error`, err && err.message));
         }
         await db.collection('rating').createIndex({ url: 1, time: -1 }).catch(err => console.log('rating index error', err && err.message));
+        await db.collection('admin_users').createIndex({ email: 1 }, { unique: true }).catch(err => console.log('admin users email index error', err && err.message));
+        await db.collection('admin_sessions').createIndex({ tokenHash: 1 }, { unique: true }).catch(err => console.log('admin sessions token index error', err && err.message));
+        await db.collection('admin_sessions').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }).catch(err => console.log('admin sessions ttl index error', err && err.message));
+        await db.collection('audit_logs').createIndex({ createdAt: -1 }).catch(err => console.log('audit logs created index error', err && err.message));
+        await db.collection('audit_logs').createIndex({ targetType: 1, targetId: 1, createdAt: -1 }).catch(err => console.log('audit logs target index error', err && err.message));
+        await bootstrapInitialAdmin().catch(err => console.log('admin bootstrap error', err && err.message));
 
         app.listen(APP_PORT, () => {
             console.info("Launch the API Server at ", APP_DOMAIN, ":", APP_PORT);

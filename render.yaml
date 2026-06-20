@@ -17,3 +17,13 @@ services:
         sync: false
       - key: MONGO_DATABASE
         value: antiscam
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ENABLE_ADMIN_UI
+        value: "true"
+      - key: ENABLE_ADMIN_API
+        value: "true"
+      - key: ADMIN_SESSION_TTL_MS
+        value: "28800000"

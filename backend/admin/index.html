@@ -1,0 +1,673 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AntiScam Admin</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --panel-2: #1f2937;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --border: rgba(148, 163, 184, .22);
+      --brand: #22c55e;
+      --brand-2: #16a34a;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --blue: #38bdf8;
+      --purple: #a78bfa;
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top left, rgba(34,197,94,.15), transparent 34%), var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    a { color: var(--blue); }
+    button, input, select, textarea {
+      font: inherit;
+    }
+    .hidden { display: none !important; }
+    .container { width: min(1180px, calc(100% - 28px)); margin: 0 auto; }
+    .topbar {
+      position: sticky; top: 0; z-index: 10;
+      backdrop-filter: blur(14px);
+      background: rgba(15, 23, 42, .88);
+      border-bottom: 1px solid var(--border);
+    }
+    .topbar-inner { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; }
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 800; letter-spacing: .2px; }
+    .brand-mark { width: 36px; height: 36px; border-radius: 12px; display: grid; place-items: center; background: linear-gradient(135deg, var(--brand), var(--blue)); color: #06111f; font-weight: 900; }
+    .admin-info { color: var(--muted); font-size: 14px; }
+    .login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .login-card, .panel, .card {
+      background: linear-gradient(180deg, rgba(31,41,55,.92), rgba(17,24,39,.96));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 24px 90px rgba(0,0,0,.35);
+    }
+    .login-card { width: min(420px, 100%); padding: 28px; }
+    .login-card h1 { margin: 0 0 8px; font-size: 28px; }
+    .login-card p { color: var(--muted); margin: 0 0 22px; line-height: 1.5; }
+    label { display: block; color: var(--muted); font-size: 13px; margin: 0 0 7px; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, .74);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 11px 12px;
+      outline: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: rgba(56, 189, 248, .65); box-shadow: 0 0 0 3px rgba(56,189,248,.12); }
+    .field { margin-bottom: 14px; }
+    .btn {
+      border: 0;
+      border-radius: 12px;
+      padding: 10px 14px;
+      cursor: pointer;
+      color: #071019;
+      background: var(--brand);
+      font-weight: 700;
+      transition: transform .12s ease, opacity .12s ease;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+    .btn.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+    .btn.danger { background: var(--danger); color: white; }
+    .btn.warn { background: var(--warning); color: #111827; }
+    .btn.blue { background: var(--blue); color: #06111f; }
+    .btn.purple { background: var(--purple); color: #101827; }
+    .btn.small { padding: 7px 10px; border-radius: 10px; font-size: 13px; }
+    .message { margin-top: 12px; color: var(--muted); font-size: 14px; min-height: 20px; }
+    .message.error { color: #fca5a5; }
+    .message.success { color: #86efac; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 16px; }
+    .tab {
+      background: rgba(31, 41, 55, .72);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 9px 14px;
+      cursor: pointer;
+    }
+    .tab.active { background: rgba(34, 197, 94, .14); color: #bbf7d0; border-color: rgba(34,197,94,.45); }
+    .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+    .stat { padding: 16px; }
+    .stat strong { display: block; font-size: 26px; margin-top: 6px; }
+    .stat span { color: var(--muted); font-size: 13px; }
+    .panel { padding: 18px; margin-bottom: 18px; }
+    .toolbar { display: grid; grid-template-columns: 180px 1fr auto; gap: 10px; align-items: end; margin-bottom: 14px; }
+    .toolbar.lists { grid-template-columns: 150px 150px 1fr auto; }
+    .cards { display: grid; gap: 12px; }
+    .card { padding: 16px; }
+    .card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+    .url { word-break: break-all; font-weight: 750; color: #f8fafc; }
+    .domain { color: var(--muted); word-break: break-all; font-size: 13px; margin-top: 4px; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; border: 1px solid var(--border); color: var(--muted); }
+    .badge.pending { color: #fde68a; border-color: rgba(245,158,11,.45); background: rgba(245,158,11,.12); }
+    .badge.approved, .badge.active { color: #bbf7d0; border-color: rgba(34,197,94,.45); background: rgba(34,197,94,.12); }
+    .badge.rejected, .badge.inactive { color: #fecaca; border-color: rgba(239,68,68,.45); background: rgba(239,68,68,.12); }
+    .meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+    .meta div { background: rgba(15,23,42,.55); border: 1px solid var(--border); border-radius: 12px; padding: 9px; }
+    .meta small { color: var(--muted); display: block; margin-bottom: 4px; }
+    .desc { color: #d1d5db; line-height: 1.5; white-space: pre-wrap; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    table { width: 100%; border-collapse: collapse; overflow: hidden; }
+    th, td { text-align: left; padding: 11px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+    td { font-size: 14px; }
+    .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 14px; }
+    .form-grid { display: grid; grid-template-columns: 2fr 1.2fr auto; gap: 10px; align-items: end; margin-bottom: 14px; }
+    .import-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0 16px; color: var(--muted); }
+    .footer-space { height: 40px; }
+    @media (max-width: 860px) {
+      .grid { grid-template-columns: repeat(2, 1fr); }
+      .toolbar, .toolbar.lists, .form-grid { grid-template-columns: 1fr; }
+      .meta { grid-template-columns: 1fr 1fr; }
+      .topbar-inner { align-items: flex-start; flex-direction: column; }
+    }
+    @media (max-width: 520px) {
+      .grid, .meta { grid-template-columns: 1fr; }
+      .card-head { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <section id="loginView" class="login-wrap">
+    <form id="loginForm" class="login-card">
+      <div class="brand" style="margin-bottom:18px"><div class="brand-mark">A</div><div>AntiScam Admin</div></div>
+      <h1>Đăng nhập</h1>
+      <p>Dành cho admin/moderator duyệt report và quản lý blacklist, whitelist, pornlist.</p>
+      <div class="field">
+        <label for="email">Email admin</label>
+        <input id="email" name="email" type="email" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="password">Mật khẩu</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn" type="submit" style="width:100%">Đăng nhập</button>
+      <div id="loginMessage" class="message"></div>
+    </form>
+  </section>
+
+  <section id="appView" class="hidden">
+    <header class="topbar">
+      <div class="container topbar-inner">
+        <div class="brand"><div class="brand-mark">A</div><div>AntiScam Admin</div></div>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <div id="adminInfo" class="admin-info"></div>
+          <button id="logoutBtn" class="btn secondary small">Đăng xuất</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <nav class="tabs">
+        <button class="tab active" data-tab="reports">Reports</button>
+        <button class="tab" data-tab="lists">Lists</button>
+        <button class="tab" data-tab="audit">Audit</button>
+        <button class="tab" data-tab="users">Users</button>
+      </nav>
+
+      <section class="grid" id="statsGrid"></section>
+
+      <section id="reportsTab" class="panel">
+        <form id="manualReportForm" class="card" style="margin-bottom:14px">
+          <div class="card-head">
+            <div>
+              <div class="url">Tạo report thủ công</div>
+              <div class="domain">Admin có thể nhập URL, domain, category và mô tả ngay trong panel.</div>
+            </div>
+          </div>
+          <div class="form-grid" style="grid-template-columns: 1.5fr 1fr 1fr">
+            <div>
+              <label>URL <span style="color:#fca5a5">*</span></label>
+              <input id="manualReportUrl" placeholder="https://example.com/path" required>
+            </div>
+            <div>
+              <label>Domain tùy chọn</label>
+              <input id="manualReportDomain" placeholder="example.com">
+            </div>
+            <div>
+              <label>Category</label>
+              <select id="manualReportCategory" required>
+                <option value="phishing_login">phishing_login</option>
+                <option value="scam_fraud">scam_fraud</option>
+                <option value="malware">malware</option>
+                <option value="fake_store">fake_store</option>
+                <option value="spam">spam</option>
+                <option value="suspicious_website">suspicious_website</option>
+                <option value="other">other</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-grid" style="grid-template-columns: 1.5fr 220px auto">
+            <div>
+              <label>Mô tả <span style="color:#fca5a5">*</span></label>
+              <textarea id="manualReportDescription" rows="3" placeholder="Ví dụ: Trang giả mạo ngân hàng, yêu cầu nhập OTP..." required></textarea>
+            </div>
+            <div>
+              <label>Action sau khi tạo</label>
+              <select id="manualReportAction">
+                <option value="pending">Chỉ tạo pending report</option>
+                <option value="blacklist">Tạo + approve blacklist</option>
+                <option value="whitelist">Tạo + approve whitelist</option>
+                <option value="pornlist">Tạo + approve pornlist</option>
+              </select>
+            </div>
+            <button class="btn" type="submit">Tạo report</button>
+          </div>
+        </form>
+        <div class="toolbar">
+          <div>
+            <label>Trạng thái</label>
+            <select id="reportStatus">
+              <option value="pending">Pending</option>
+              <option value="under_review">Under review</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="duplicate">Duplicate</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+          <div>
+            <label>Tìm kiếm URL/domain/mô tả</label>
+            <input id="reportSearch" placeholder="vd: bank, shopee, example.com">
+          </div>
+          <button id="reloadReports" class="btn blue">Tải reports</button>
+        </div>
+        <div id="reportsMessage" class="message"></div>
+        <div id="reportsList" class="cards"></div>
+      </section>
+
+      <section id="listsTab" class="panel hidden">
+        <div class="toolbar lists">
+          <div>
+            <label>List</label>
+            <select id="listType">
+              <option value="blacklist">blacklist</option>
+              <option value="whitelist">whitelist</option>
+              <option value="pornlist">pornlist</option>
+            </select>
+          </div>
+          <div>
+            <label>Status</label>
+            <select id="listStatus">
+              <option value="active">active</option>
+              <option value="inactive">inactive</option>
+              <option value="all">all</option>
+            </select>
+          </div>
+          <div>
+            <label>Tìm kiếm</label>
+            <input id="listSearch" placeholder="domain, url, reason">
+          </div>
+          <button id="reloadLists" class="btn blue">Tải list</button>
+        </div>
+
+        <form id="addListForm" class="form-grid">
+          <div>
+            <label>URL/domain</label>
+            <input id="listUrl" placeholder="https://example.com hoặc example.com" required>
+          </div>
+          <div>
+            <label>Lý do/source note</label>
+            <input id="listReason" placeholder="manual review">
+          </div>
+          <button class="btn" type="submit">Thêm/Update</button>
+        </form>
+
+        <div class="import-row">
+          <input id="importFile" type="file" accept="application/json,.json" style="max-width:320px">
+          <button id="importBtn" class="btn secondary small">Import JSON vào list đang chọn</button>
+          <span>Endpoint import cũ cũng đã khóa admin-only.</span>
+        </div>
+
+        <div id="listsMessage" class="message"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Domain/URL</th><th>Status</th><th>Source</th><th>Reason</th><th>Updated</th><th>Action</th></tr></thead>
+            <tbody id="listsTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="auditTab" class="panel hidden">
+        <div class="toolbar">
+          <div>
+            <label>Tìm kiếm action/admin/target</label>
+            <input id="auditSearch" placeholder="approve_report, admin@example.com">
+          </div>
+          <div></div>
+          <button id="reloadAudit" class="btn blue">Tải audit</button>
+        </div>
+        <div id="auditMessage" class="message"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Admin</th><th>Action</th><th>Target</th><th>IP</th><th>Metadata</th></tr></thead>
+            <tbody id="auditTable"></tbody>
+          </table>
+        </div>
+      </section>
+      <section id="usersTab" class="panel hidden">
+        <p class="message">Chỉ role <strong>admin</strong> mới quản lý được admin users.</p>
+        <form id="addUserForm" class="form-grid">
+          <div>
+            <label>Email</label>
+            <input id="newUserEmail" type="email" placeholder="moderator@example.com" required>
+          </div>
+          <div>
+            <label>Password ban đầu</label>
+            <input id="newUserPassword" type="password" minlength="12" placeholder="tối thiểu 12 ký tự" required>
+          </div>
+          <div>
+            <label>Role</label>
+            <select id="newUserRole">
+              <option value="moderator">moderator</option>
+              <option value="viewer">viewer</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+          <button class="btn" type="submit">Tạo user</button>
+        </form>
+        <div style="margin-bottom:12px"><button id="reloadUsers" class="btn blue small">Tải users</button></div>
+        <div id="usersMessage" class="message"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Email</th><th>Role</th><th>Status</th><th>Created</th><th>Last login</th><th>Action</th></tr></thead>
+            <tbody id="usersTable"></tbody>
+          </table>
+        </div>
+      </section>
+      <div class="footer-space"></div>
+    </main>
+  </section>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const state = { admin: null, csrfToken: '', reports: [], listItems: [], users: [], activeTab: 'reports' };
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
+    }
+    function fmtDate(value) {
+      if (!value) return '';
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('vi-VN');
+    }
+    function msg(id, text, kind = '') {
+      const el = $(id);
+      el.textContent = text || '';
+      el.className = 'message ' + kind;
+    }
+    async function api(path, options = {}) {
+      const opts = { credentials: 'same-origin', ...options };
+      opts.headers = opts.headers || {};
+      const method = String(opts.method || 'GET').toUpperCase();
+      if (state.csrfToken && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+        opts.headers['x-csrf-token'] = state.csrfToken;
+      }
+      if (opts.body && !(opts.body instanceof FormData)) {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(opts.body);
+      }
+      const res = await fetch(path, opts);
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch (_) { data = { message: text }; }
+      if (res.status === 401 && path !== '/api/admin/me') showLogin();
+      if (!res.ok) throw new Error((data && data.message) || ('HTTP ' + res.status));
+      return data;
+    }
+    function showLogin() {
+      $('loginView').classList.remove('hidden');
+      $('appView').classList.add('hidden');
+    }
+    function showApp() {
+      $('loginView').classList.add('hidden');
+      $('appView').classList.remove('hidden');
+      $('adminInfo').textContent = `${state.admin.email} · ${state.admin.role}`;
+    }
+    async function refreshStats() {
+      const s = await api('/api/admin/stats');
+      const stats = [
+        ['Pending', s.pendingReports, 'pending'], ['Approved', s.approvedReports, 'approved'], ['Rejected', s.rejectedReports, 'rejected'],
+        ['Blacklist', s.blacklistCount, 'active'], ['Whitelist', s.whitelistCount, 'active'], ['Pornlist', s.pornlistCount, 'active']
+      ];
+      $('statsGrid').innerHTML = stats.map(([label, value, cls]) => `<div class="card stat"><span>${label}</span><strong class="badge ${cls}" style="font-size:24px">${value}</strong></div>`).join('');
+    }
+    async function loadReports() {
+      msg('reportsMessage', 'Đang tải...');
+      const status = $('reportStatus').value;
+      const search = $('reportSearch').value.trim();
+      const qs = new URLSearchParams({ status, limit: '50' });
+      if (search) qs.set('search', search);
+      const data = await api('/api/admin/reports?' + qs.toString());
+      state.reports = data.items || [];
+      renderReports();
+      msg('reportsMessage', `${data.total || 0} báo cáo`);
+    }
+    function renderReports() {
+      if (!state.reports.length) {
+        $('reportsList').innerHTML = '<div class="card"><div class="message">Không có report phù hợp.</div></div>';
+        return;
+      }
+      $('reportsList').innerHTML = state.reports.map(r => {
+        const id = String(r._id || '');
+        const screenshot = r.screenshotUrl ? `<a href="${escapeHtml(r.screenshotUrl)}" target="_blank" rel="noopener">Xem ảnh</a>` : 'Không có';
+        const canModerate = state.admin && ['admin','moderator'].includes(state.admin.role) && !['approved','rejected'].includes(r.status);
+        return `<article class="card">
+          <div class="card-head">
+            <div><div class="url">${escapeHtml(r.url)}</div><div class="domain">${escapeHtml(r.domain)}</div></div>
+            <span class="badge ${escapeHtml(r.status || 'pending')}">${escapeHtml(r.status || 'pending')}</span>
+          </div>
+          <div class="meta">
+            <div><small>Category</small>${escapeHtml(r.category)}</div>
+            <div><small>IP/Geo</small>${escapeHtml(r.ip || '')}<br>${escapeHtml([r.city, r.region, r.country].filter(Boolean).join(', '))}</div>
+            <div><small>Screenshot</small>${screenshot}</div>
+            <div><small>Source</small>${escapeHtml(r.source || 'community')}</div>
+            <div><small>Created</small>${fmtDate(r.createdAt)}</div>
+          </div>
+          <div class="desc">${escapeHtml(r.description)}</div>
+          ${r.reviewNote ? `<div class="message">Review note: ${escapeHtml(r.reviewNote)}</div>` : ''}
+          <div class="actions">
+            ${canModerate ? `<button class="btn small" onclick="approveReport('${id}','blacklist')">Approve blacklist</button>
+              <button class="btn small purple" onclick="approveReport('${id}','pornlist')">Approve pornlist</button>
+              <button class="btn small blue" onclick="approveReport('${id}','whitelist')">Approve whitelist</button>
+              <button class="btn small danger" onclick="rejectReport('${id}')">Reject</button>
+              <button class="btn small secondary" onclick="markReport('${id}','under_review')">Under review</button>
+              <button class="btn small secondary" onclick="markReport('${id}','duplicate')">Duplicate</button>` : ''}
+          </div>
+        </article>`;
+      }).join('');
+    }
+    async function createManualReport(e) {
+      e.preventDefault();
+      const payload = {
+        url: $('manualReportUrl').value.trim(),
+        domain: $('manualReportDomain').value.trim(),
+        category: $('manualReportCategory').value,
+        description: $('manualReportDescription').value.trim(),
+        action: $('manualReportAction').value
+      };
+      if (!payload.url || !payload.description) return msg('reportsMessage', 'URL và mô tả là bắt buộc.', 'error');
+      const result = await api('/api/admin/reports', { method: 'POST', body: payload });
+      $('manualReportUrl').value = '';
+      $('manualReportDomain').value = '';
+      $('manualReportDescription').value = '';
+      $('manualReportAction').value = 'pending';
+      msg('reportsMessage', result.listEntry ? 'Đã tạo và approve report thủ công.' : 'Đã tạo pending report thủ công.', 'success');
+      await Promise.all([loadReports(), refreshStats()]);
+    }
+    async function approveReport(id, decision) {
+      const note = prompt(`Lý do approve vào ${decision}:`, 'Đã xác minh thủ công');
+      if (note === null) return;
+      await api(`/api/admin/reports/${id}/approve`, { method: 'PATCH', body: { decision, reviewNote: note } });
+      msg('reportsMessage', 'Đã approve report.', 'success');
+      await Promise.all([loadReports(), refreshStats()]);
+    }
+    async function rejectReport(id) {
+      const note = prompt('Lý do reject:', 'Không đủ bằng chứng');
+      if (note === null) return;
+      await api(`/api/admin/reports/${id}/reject`, { method: 'PATCH', body: { reviewNote: note } });
+      msg('reportsMessage', 'Đã reject report.', 'success');
+      await Promise.all([loadReports(), refreshStats()]);
+    }
+    async function markReport(id, status) {
+      const note = prompt(`Ghi chú cho status ${status}:`, '');
+      if (note === null) return;
+      await api(`/api/admin/reports/${id}/status`, { method: 'PATCH', body: { status, reviewNote: note } });
+      await loadReports();
+    }
+    async function loadLists() {
+      msg('listsMessage', 'Đang tải...');
+      const type = $('listType').value;
+      const status = $('listStatus').value;
+      const search = $('listSearch').value.trim();
+      const qs = new URLSearchParams({ status, limit: '100' });
+      if (search) qs.set('search', search);
+      const data = await api(`/api/admin/lists/${type}?` + qs.toString());
+      state.listItems = data.items || [];
+      renderLists();
+      msg('listsMessage', `${data.total || 0} item`);
+    }
+    function renderLists() {
+      if (!state.listItems.length) {
+        $('listsTable').innerHTML = '<tr><td colspan="6" class="message">Không có item.</td></tr>';
+        return;
+      }
+      const type = $('listType').value;
+      $('listsTable').innerHTML = state.listItems.map(item => {
+        const id = String(item._id || '');
+        const isActive = (item.status || 'active') === 'active';
+        return `<tr>
+          <td><strong>${escapeHtml(item.domain || '')}</strong><br><span class="domain">${escapeHtml(item.url || '')}</span></td>
+          <td><span class="badge ${isActive ? 'active' : 'inactive'}">${escapeHtml(item.status || 'active')}</span></td>
+          <td>${escapeHtml(item.source || '')}</td>
+          <td>${escapeHtml(item.reason || '')}</td>
+          <td>${fmtDate(item.updatedAt || item.createdAt)}</td>
+          <td><div class="actions" style="margin:0">
+            <button class="btn small secondary" onclick="toggleListItem('${type}','${id}',${isActive ? 'false' : 'true'})">${isActive ? 'Tắt' : 'Bật'}</button>
+          </div></td>
+        </tr>`;
+      }).join('');
+    }
+    async function addListEntry(e) {
+      e.preventDefault();
+      const type = $('listType').value;
+      const url = $('listUrl').value.trim();
+      const reason = $('listReason').value.trim();
+      await api(`/api/admin/lists/${type}`, { method: 'POST', body: { url, reason } });
+      $('listUrl').value = '';
+      $('listReason').value = '';
+      msg('listsMessage', 'Đã thêm/update item.', 'success');
+      await Promise.all([loadLists(), refreshStats()]);
+    }
+    async function toggleListItem(type, id, active) {
+      await api(`/api/admin/lists/${type}/${id}`, { method: 'PATCH', body: { status: active ? 'active' : 'inactive' } });
+      await Promise.all([loadLists(), refreshStats()]);
+    }
+    async function importList() {
+      const file = $('importFile').files[0];
+      if (!file) return msg('listsMessage', 'Chọn file JSON trước.', 'error');
+      const type = $('listType').value;
+      const fd = new FormData();
+      fd.append('file', file);
+      const result = await api(`/api/admin/import/${type}`, { method: 'POST', body: fd });
+      msg('listsMessage', `Import xong: valid ${result.valid}, upserted ${result.upserted}`, 'success');
+      $('importFile').value = '';
+      await Promise.all([loadLists(), refreshStats()]);
+    }
+    async function loadAudit() {
+      msg('auditMessage', 'Đang tải...');
+      const search = $('auditSearch').value.trim();
+      const qs = new URLSearchParams({ limit: '100' });
+      if (search) qs.set('search', search);
+      const data = await api('/api/admin/audit-logs?' + qs.toString());
+      renderAudit(data.items || []);
+      msg('auditMessage', `${data.total || 0} audit log`);
+    }
+    function renderAudit(items) {
+      if (!items.length) {
+        $('auditTable').innerHTML = '<tr><td colspan="6" class="message">Không có audit log.</td></tr>';
+        return;
+      }
+      $('auditTable').innerHTML = items.map(item => `<tr>
+        <td>${fmtDate(item.createdAt)}</td>
+        <td>${escapeHtml(item.adminEmail || '')}</td>
+        <td>${escapeHtml(item.action || '')}</td>
+        <td>${escapeHtml(item.targetType || '')}<br><span class="domain">${escapeHtml(item.targetId || '')}</span></td>
+        <td>${escapeHtml(item.ip || '')}</td>
+        <td><pre style="white-space:pre-wrap;margin:0;color:var(--muted)">${escapeHtml(JSON.stringify(item.metadata || {}, null, 2))}</pre></td>
+      </tr>`).join('');
+    }
+    async function loadUsers() {
+      msg('usersMessage', 'Đang tải...');
+      const data = await api('/api/admin/users');
+      state.users = data.items || [];
+      renderUsers();
+      msg('usersMessage', `${state.users.length} user`);
+    }
+    function renderUsers() {
+      if (!state.users.length) {
+        $('usersTable').innerHTML = '<tr><td colspan="6" class="message">Không có user hoặc bạn không có quyền xem.</td></tr>';
+        return;
+      }
+      $('usersTable').innerHTML = state.users.map(u => {
+        const id = String(u._id || '');
+        const isActive = (u.status || 'active') === 'active';
+        return `<tr>
+          <td>${escapeHtml(u.email || '')}</td>
+          <td>${escapeHtml(u.role || '')}</td>
+          <td><span class="badge ${isActive ? 'active' : 'inactive'}">${escapeHtml(u.status || 'active')}</span></td>
+          <td>${fmtDate(u.createdAt)}</td>
+          <td>${fmtDate(u.lastLoginAt)}</td>
+          <td><div class="actions" style="margin:0">
+            <button class="btn small secondary" onclick="toggleUser('${id}',${isActive ? 'false' : 'true'})">${isActive ? 'Disable' : 'Enable'}</button>
+            <button class="btn small warn" onclick="resetUserPassword('${id}')">Reset pass</button>
+          </div></td>
+        </tr>`;
+      }).join('');
+    }
+    async function addUser(e) {
+      e.preventDefault();
+      await api('/api/admin/users', { method: 'POST', body: { email: $('newUserEmail').value, password: $('newUserPassword').value, role: $('newUserRole').value } });
+      $('newUserEmail').value = '';
+      $('newUserPassword').value = '';
+      msg('usersMessage', 'Đã tạo user.', 'success');
+      await loadUsers();
+    }
+    async function toggleUser(id, active) {
+      await api(`/api/admin/users/${id}`, { method: 'PATCH', body: { status: active ? 'active' : 'disabled' } });
+      await loadUsers();
+    }
+    async function resetUserPassword(id) {
+      const password = prompt('Nhập mật khẩu mới, tối thiểu 12 ký tự:');
+      if (!password) return;
+      await api(`/api/admin/users/${id}`, { method: 'PATCH', body: { password } });
+      msg('usersMessage', 'Đã đổi mật khẩu user.', 'success');
+    }
+    function switchTab(tab) {
+      state.activeTab = tab;
+      document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+      $('reportsTab').classList.toggle('hidden', tab !== 'reports');
+      $('listsTab').classList.toggle('hidden', tab !== 'lists');
+      $('auditTab').classList.toggle('hidden', tab !== 'audit');
+      $('usersTab').classList.toggle('hidden', tab !== 'users');
+      if (tab === 'reports') loadReports().catch(err => msg('reportsMessage', err.message, 'error'));
+      if (tab === 'lists') loadLists().catch(err => msg('listsMessage', err.message, 'error'));
+      if (tab === 'audit') loadAudit().catch(err => msg('auditMessage', err.message, 'error'));
+      if (tab === 'users') loadUsers().catch(err => msg('usersMessage', err.message, 'error'));
+    }
+    $('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      msg('loginMessage', 'Đang đăng nhập...');
+      try {
+        const data = await api('/api/admin/login', { method: 'POST', body: { email: $('email').value, password: $('password').value } });
+        state.admin = data.admin;
+        state.csrfToken = data.csrfToken || '';
+        showApp();
+        await Promise.all([refreshStats(), loadReports()]);
+      } catch (err) {
+        msg('loginMessage', err.message, 'error');
+      }
+    });
+    $('logoutBtn').addEventListener('click', async () => {
+      await api('/api/admin/logout', { method: 'POST' }).catch(() => {});
+      state.admin = null;
+      state.csrfToken = '';
+      showLogin();
+    });
+    $('reloadReports').addEventListener('click', () => loadReports().catch(err => msg('reportsMessage', err.message, 'error')));
+    $('manualReportForm').addEventListener('submit', (e) => createManualReport(e).catch(err => msg('reportsMessage', err.message, 'error')));
+    $('reloadLists').addEventListener('click', () => loadLists().catch(err => msg('listsMessage', err.message, 'error')));
+    $('reloadAudit').addEventListener('click', () => loadAudit().catch(err => msg('auditMessage', err.message, 'error')));
+    $('reloadUsers').addEventListener('click', () => loadUsers().catch(err => msg('usersMessage', err.message, 'error')));
+    $('addListForm').addEventListener('submit', (e) => addListEntry(e).catch(err => msg('listsMessage', err.message, 'error')));
+    $('addUserForm').addEventListener('submit', (e) => addUser(e).catch(err => msg('usersMessage', err.message, 'error')));
+    $('importBtn').addEventListener('click', () => importList().catch(err => msg('listsMessage', err.message, 'error')));
+    document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+    ['reportStatus', 'listType', 'listStatus'].forEach(id => $(id).addEventListener('change', () => state.activeTab === 'reports' ? loadReports().catch(err => msg('reportsMessage', err.message, 'error')) : loadLists().catch(err => msg('listsMessage', err.message, 'error'))));
+    window.approveReport = approveReport;
+    window.rejectReport = rejectReport;
+    window.markReport = markReport;
+    window.toggleListItem = toggleListItem;
+    window.toggleUser = toggleUser;
+    window.resetUserPassword = resetUserPassword;
+
+    api('/api/admin/me').then(async data => {
+      state.admin = data.admin;
+      state.csrfToken = data.csrfToken || '';
+      showApp();
+      await Promise.all([refreshStats(), loadReports()]);
+    }).catch(() => showLogin());
+  </script>
+</body>
+</html>
