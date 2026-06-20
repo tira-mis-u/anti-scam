@@ -10,6 +10,7 @@ const colors = { '-1':'#22c55e', '0':'#facc15', '2':'#fb923c', '1':'#dc2626' };
 const reasonColors = { safe:'#22c55e', warning:'#facc15', suspicious:'#fb923c', danger:'#dc2626' };
 let currentTabUrl = '';
 let currentDomain = '';
+let currentPageTitle = '';
 
 const initTheme = () => {
   const stored = localStorage.getItem('antiscam-theme');
@@ -408,7 +409,10 @@ chrome.tabs.query({ currentWindow: true, active: true }, ([tab]) => {
   const tabId = tab.id;
   let url; try { url = new URL(tab.url); } catch { return; }
   const domain = url.hostname;
-  currentTabUrl = tab.url; currentDomain = domain;
+  currentTabUrl = tab.url;
+  currentDomain = domain.replace(/^www\./i, '');
+  currentPageTitle = tab.title || '';
+  updateReportTargetInfo();
 
   if (!['https:', 'http:'].includes(url.protocol)) {
     $('#pluginBody').hide(); $('#domain_url').text(domain); return;
@@ -453,46 +457,199 @@ chrome.tabs.query({ currentWindow: true, active: true }, ([tab]) => {
 
 
 // Community report UI
+// Đổi domain này nếu Render cấp URL khác cho service backend của bạn.
+const REPORT_API_URL = 'https://anti-scam-api.onrender.com/api/report';
+const REPORT_MAX_FILE_SIZE = 5 * 1024 * 1024;
+const REPORT_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+
 const reportToggle = document.getElementById('reportToggle');
 const reportForm = document.getElementById('reportForm');
 const sendReport = document.getElementById('sendReport');
 const reportCancel = document.getElementById('reportCancel');
+const reportCategory = document.getElementById('reportCategory');
+const reportDescription = document.getElementById('reportDescription');
+const reportDescriptionCount = document.getElementById('reportDescriptionCount');
+const reportScreenshot = document.getElementById('reportScreenshot');
+const reportFileName = document.getElementById('reportFileName');
+const reportImagePreviewWrap = document.getElementById('reportImagePreviewWrap');
+const reportImagePreview = document.getElementById('reportImagePreview');
+const reportRemoveImage = document.getElementById('reportRemoveImage');
+
+let selectedReportFile = null;
+
+const setReportStatus = (message, type = '') => {
+  const statusEl = document.getElementById('reportStatus');
+  if (!statusEl) return;
+  statusEl.textContent = message || '';
+  statusEl.classList.remove('success', 'error', 'loading');
+  if (type) statusEl.classList.add(type);
+};
+
+function updateReportTargetInfo() {
+  const urlEl = document.getElementById('reportCurrentUrl');
+  const domainEl = document.getElementById('reportCurrentDomain');
+  if (urlEl) urlEl.textContent = currentTabUrl || 'Không lấy được URL hiện tại';
+  if (domainEl) domainEl.textContent = currentDomain || 'Không lấy được tên miền';
+}
+
+const resetReportImage = () => {
+  selectedReportFile = null;
+  if (reportScreenshot) reportScreenshot.value = '';
+  if (reportFileName) reportFileName.textContent = 'PNG, JPG, JPEG, WEBP · tối đa 5MB';
+  if (reportImagePreview) reportImagePreview.removeAttribute('src');
+  if (reportImagePreviewWrap) reportImagePreviewWrap.hidden = true;
+};
+
+const resetReportForm = () => {
+  if (reportCategory) reportCategory.value = '';
+  if (reportDescription) reportDescription.value = '';
+  if (reportDescriptionCount) reportDescriptionCount.textContent = '0/1000 ký tự';
+  resetReportImage();
+  setReportStatus('');
+};
+
 const closeReportPanel = () => {
   if (!reportForm) return;
   reportForm.hidden = true;
   reportToggle && reportToggle.setAttribute('aria-expanded', 'false');
-  const statusEl = document.getElementById('reportStatus');
-  if (statusEl) statusEl.textContent = '';
+  setReportStatus('');
 };
+
+const getBrowserName = () => {
+  const ua = navigator.userAgent || '';
+  if (/Edg\//.test(ua)) return 'Microsoft Edge';
+  if (/OPR\//.test(ua) || /Opera\//.test(ua)) return 'Opera';
+  if (/Firefox\//.test(ua)) return 'Firefox';
+  if (/Chrome\//.test(ua) || /Chromium\//.test(ua)) return 'Chrome';
+  if (/Safari\//.test(ua)) return 'Safari';
+  return 'Không xác định';
+};
+
+const validateReportForm = () => {
+  let parsedUrl = null;
+  try { parsedUrl = new URL(currentTabUrl); } catch (_) {}
+  if (!parsedUrl || !['http:', 'https:'].includes(parsedUrl.protocol)) return 'URL không hợp lệ.';
+  if (!reportCategory || !reportCategory.value) return 'Vui lòng chọn loại báo cáo.';
+  const description = (reportDescription && reportDescription.value || '').trim();
+  if (description.length < 20) return 'Mô tả phải có tối thiểu 20 ký tự.';
+  if (description.length > 1000) return 'Mô tả không được vượt quá 1000 ký tự.';
+  if (selectedReportFile && selectedReportFile.size > REPORT_MAX_FILE_SIZE) return 'File vượt quá 5MB.';
+  if (selectedReportFile && !REPORT_ALLOWED_TYPES.includes(selectedReportFile.type)) return 'Định dạng ảnh không được hỗ trợ.';
+  return '';
+};
+
+const getReportDeviceId = async () => {
+  const key = 'antiScamReportDeviceId';
+  try {
+    const stored = await chrome.storage.local.get(key);
+    if (stored && stored[key]) return stored[key];
+    const id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    await chrome.storage.local.set({ [key]: id });
+    return id;
+  } catch (_) {
+    return '';
+  }
+};
+
+const buildReportFormData = async () => {
+  const manifest = chrome.runtime.getManifest ? chrome.runtime.getManifest() : {};
+  const parsedUrl = new URL(currentTabUrl);
+  const formData = new FormData();
+  formData.append('url', currentTabUrl);
+  formData.append('domain', (currentDomain || parsedUrl.hostname || '').replace(/^www\./i, ''));
+  formData.append('pageTitle', currentPageTitle || document.title || '');
+  formData.append('timestamp', new Date().toISOString());
+  formData.append('extensionVersion', manifest.version || '');
+  formData.append('browserName', getBrowserName());
+  formData.append('browserLanguage', navigator.language || '');
+  formData.append('userAgent', navigator.userAgent || '');
+  formData.append('deviceId', await getReportDeviceId());
+  formData.append('category', reportCategory.value);
+  formData.append('description', (reportDescription.value || '').trim());
+  if (selectedReportFile) formData.append('screenshot', selectedReportFile, selectedReportFile.name);
+  return formData;
+};
+
 if (reportToggle && reportForm) {
   reportToggle.setAttribute('aria-expanded', 'false');
   reportToggle.addEventListener('click', () => {
     reportForm.hidden = !reportForm.hidden;
     reportToggle.setAttribute('aria-expanded', String(!reportForm.hidden));
+    updateReportTargetInfo();
+    setReportStatus('');
   });
 }
+
+if (reportDescription && reportDescriptionCount) {
+  reportDescription.addEventListener('input', () => {
+    const len = (reportDescription.value || '').length;
+    reportDescriptionCount.textContent = `${len}/1000 ký tự`;
+  });
+}
+
+if (reportScreenshot) {
+  reportScreenshot.addEventListener('change', () => {
+    setReportStatus('');
+    const file = reportScreenshot.files && reportScreenshot.files[0];
+    if (!file) { resetReportImage(); return; }
+    if (!REPORT_ALLOWED_TYPES.includes(file.type)) {
+      resetReportImage();
+      setReportStatus('Định dạng ảnh không được hỗ trợ.', 'error');
+      return;
+    }
+    if (file.size > REPORT_MAX_FILE_SIZE) {
+      resetReportImage();
+      setReportStatus('File vượt quá 5MB.', 'error');
+      return;
+    }
+    selectedReportFile = file;
+    if (reportFileName) reportFileName.textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (reportImagePreview) reportImagePreview.src = reader.result;
+      if (reportImagePreviewWrap) reportImagePreviewWrap.hidden = false;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+if (reportRemoveImage) reportRemoveImage.addEventListener('click', resetReportImage);
+
 if (reportCancel) {
   reportCancel.addEventListener('click', () => {
-    const reasonEl = document.getElementById('reportReason');
-    if (reasonEl) reasonEl.value = '';
+    resetReportForm();
     closeReportPanel();
   });
 }
+
 if (sendReport) {
-  sendReport.addEventListener('click', () => {
-    const reasonEl = document.getElementById('reportReason');
-    const statusEl = document.getElementById('reportStatus');
-    const reason = (reasonEl && reasonEl.value || '').trim();
-    if (!reason) { if (statusEl) statusEl.textContent = 'Vui lòng nhập lý do.'; return; }
-    if (statusEl) statusEl.textContent = 'Đang gửi...';
-    chrome.runtime.sendMessage({ type:'COMMUNITY_REPORT', payload:{ url: currentTabUrl, domain: currentDomain, reason } }, (resp) => {
-      if (chrome.runtime.lastError || !resp || !resp.ok) {
-        if (statusEl) statusEl.textContent = 'Không gửi được báo cáo.';
+  sendReport.addEventListener('click', async () => {
+    const error = validateReportForm();
+    if (error) { setReportStatus(error, 'error'); return; }
+
+    setReportStatus('Đang gửi báo cáo...', 'loading');
+    sendReport.disabled = true;
+    try {
+      const response = await fetch(REPORT_API_URL, { method: 'POST', body: await buildReportFormData() });
+      let data = null;
+      try { data = await response.json(); } catch (_) {}
+
+      if (response.status === 409) {
+        setReportStatus((data && data.message) || 'Bạn đã gửi báo cáo cho tên miền này trước đó.', 'error');
         return;
       }
-      if (statusEl) statusEl.textContent = 'Đã gửi báo cáo. Cảm ơn bạn!';
-      if (reasonEl) reasonEl.value = '';
-      setTimeout(closeReportPanel, 900);
-    });
+      if (!response.ok) {
+        setReportStatus((data && data.message) || 'Không thể gửi báo cáo. Vui lòng thử lại.', 'error');
+        return;
+      }
+
+      resetReportForm();
+      setReportStatus('Cảm ơn bạn đã góp phần bảo vệ cộng đồng.\nBáo cáo đã được gửi thành công.', 'success');
+      setTimeout(closeReportPanel, 1600);
+    } catch (_) {
+      setReportStatus('Không thể gửi báo cáo. Vui lòng thử lại.', 'error');
+    } finally {
+      sendReport.disabled = false;
+    }
   });
 }

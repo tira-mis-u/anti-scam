@@ -44,7 +44,45 @@
         <div id="community_report">
           <button id="reportToggle" type="button">Báo cáo website</button>
           <div id="reportForm" class="report-panel" hidden>
-            <textarea id="reportReason" maxlength="300" placeholder="Lý do báo cáo (ví dụ: yêu cầu OTP, giả mạo ngân hàng...)"></textarea>
+            <div class="report-current-target">
+              <div class="report-info-row">
+                <span class="report-info-label">URL đang báo cáo</span>
+                <span id="reportCurrentUrl" class="report-info-value">Đang lấy URL...</span>
+              </div>
+              <div class="report-info-row">
+                <span class="report-info-label">Tên miền</span>
+                <span id="reportCurrentDomain" class="report-info-value">Đang lấy tên miền...</span>
+              </div>
+            </div>
+
+            <label class="report-field-label" for="reportCategory">Loại báo cáo <span class="required-mark">*</span></label>
+            <select id="reportCategory" class="report-input" required>
+              <option value="">Chọn loại báo cáo</option>
+              <option value="phishing_login">Giả mạo đăng nhập (Phishing)</option>
+              <option value="scam_fraud">Lừa đảo (Scam/Fraud)</option>
+              <option value="malware">Phát tán mã độc (Malware)</option>
+              <option value="fake_store">Cửa hàng giả mạo</option>
+              <option value="spam">Spam</option>
+              <option value="suspicious_website">Website đáng ngờ</option>
+              <option value="other">Khác</option>
+            </select>
+
+            <label class="report-field-label" for="reportDescription">Mô tả chi tiết <span class="required-mark">*</span></label>
+            <textarea id="reportDescription" class="report-input" minlength="20" maxlength="1000" placeholder="Mô tả lý do bạn cho rằng website này nguy hiểm..."></textarea>
+            <div class="report-hint">Ví dụ: Website giả mạo ngân hàng, yêu cầu nhập OTP, mạo danh Shopee, dụ dỗ đầu tư tài chính.</div>
+            <div id="reportDescriptionCount" class="report-counter">0/1000 ký tự</div>
+
+            <label class="report-field-label">Ảnh minh chứng <span class="optional-mark">(tùy chọn)</span></label>
+            <div class="report-upload-row">
+              <label for="reportScreenshot" class="report-upload-btn">Tải ảnh lên</label>
+              <input id="reportScreenshot" type="file" accept="image/png,image/jpeg,image/jpg,image/webp" hidden>
+              <span id="reportFileName" class="report-file-name">PNG, JPG, JPEG, WEBP · tối đa 5MB</span>
+            </div>
+            <div id="reportImagePreviewWrap" class="report-image-preview-wrap" hidden>
+              <img id="reportImagePreview" class="report-image-preview" alt="Ảnh minh chứng xem trước">
+              <button id="reportRemoveImage" type="button" class="report-remove-image">Xóa ảnh</button>
+            </div>
+
             <div class="report-actions">
               <button id="sendReport" type="button">Gửi báo cáo</button>
               <button id="reportCancel" type="button">Huỷ</button>

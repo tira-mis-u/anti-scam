@@ -1,3 +1,4 @@
+require('dotenv').config();
 const config = require('config');
 const express = require('express');
 
@@ -14,7 +15,7 @@ const morgan = require('morgan');
 const axios = require('axios');
 const multer = require('multer');
 const _ = require('lodash/array');
-const { readFile } = require('fs');
+
 const { MongoClient } = require('mongodb');
 const dns = require('dns').promises;
 const crypto = require('crypto');
@@ -25,18 +26,27 @@ const opts = { fields, header: false };
 const parser = new Parser(opts);
 
 var refreshTokens = [];
-const accessTokenSecret = config.get("auth.accessTokenSecret");
-const refreshTokenSecret = config.get("auth.refreshTokenSecret");
-const maxLengthUrl = config.get("maxLengthUrl");
+const APP_VERSION = process.env.APP_VERSION || config.get("app.version");
+const APP_PORT = process.env.PORT || config.get("app.port");
+const APP_DOMAIN = process.env.APP_DOMAIN || config.get("app.domain");
+const accessTokenSecret = process.env.ACCESS_TOKEN_SECRET || 'dev-access-token-secret';
+const refreshTokenSecret = process.env.REFRESH_TOKEN_SECRET || 'dev-refresh-token-secret';
+const maxLengthUrl = Number(process.env.MAX_LENGTH_URL || config.get("maxLengthUrl") || 1000);
 
 const apiLimiter = rateLimit({
     windowMs: 55 * 60 * 1000,
     max: 100,
     message: "Too many request from this IP, please try again after an hour"
   });
+const reportLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 20,
+    message: { message: "Bạn gửi báo cáo quá nhanh. Vui lòng thử lại sau." }
+  });
 
 
 const app = express();
+app.set('trust proxy', true);
 // Enable CORS
 app.use(cors());
 app.use(express.static('public'));
@@ -48,12 +58,25 @@ app.use(bodyParser.urlencoded({
   extended: true
 }));
 const upload = multer();
+const REPORT_ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp']);
+const reportUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        if (!REPORT_ALLOWED_MIME.has(file.mimetype)) return cb(new Error('UNSUPPORTED_REPORT_IMAGE'));
+        cb(null, true);
+    }
+});
 
 // Enable logging
 const accessLogStream = fs.createWriteStream(path.join(__dirname, 'access.log'), { flags: 'a' })
 app.use(morgan('combined', { stream: accessLogStream }))
+// Health check cho Render/Railway/VPS
+app.get('/', (req, res) => res.status(200).send({ ok: true, service: 'AntiScam API' }));
+app.get('/health', (req, res) => res.status(200).send({ ok: true, service: 'AntiScam API' }));
+
 // Rate limit
-app.use(`/${config.get("app.version")}/rate`, apiLimiter);
+app.use(`/${APP_VERSION}/rate`, apiLimiter);
 
 // TODO: authentication / authorization functions
 const clients = config.get("auth.clients");
@@ -122,7 +145,7 @@ const getDomainAgeRdap = async (domain) => {
 };
 const urlIdForVirusTotal = (url) => Buffer.from(url).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const checkVirusTotal = async (url) => {
-    const key = process.env.VIRUSTOTAL_API_KEY || getCfg('threatIntel.virusTotal.apiKey');
+    const key = process.env.VIRUSTOTAL_API_KEY;
     if (!key) return null;
     return withTimeout((async () => {
         const vtUrl = `https://www.virustotal.com/api/v3/urls/${urlIdForVirusTotal(url)}`;
@@ -141,7 +164,7 @@ const checkUrlHaus = async (url, domain) => withTimeout((async () => {
     return { source: 'URLhaus', dangerous: !!(hitUrl || hitHost), urlStatus: urlResp && urlResp.data && urlResp.data.query_status, hostStatus: hostResp && hostResp.data && hostResp.data.query_status };
 })(), 7000, null);
 const checkThreatFox = async (domain) => withTimeout((async () => {
-    const key = process.env.THREATFOX_API_KEY || getCfg('threatIntel.threatFox.apiKey');
+    const key = process.env.THREATFOX_API_KEY;
     const headers = { 'Content-Type': 'application/json' };
     if (key) headers['Auth-Key'] = key;
     const resp = await axios.post('https://threatfox-api.abuse.ch/api/v1/', { query: 'search_ioc', search_term: domain }, { headers, timeout: 5500 });
@@ -151,7 +174,7 @@ const resolveIp = async (domain) => {
     try { const r = await dns.lookup(domain); return r && r.address; } catch (_) { return null; }
 };
 const checkAbuseIPDB = async (ip) => {
-    const key = process.env.ABUSEIPDB_API_KEY || getCfg('threatIntel.abuseIPDB.apiKey');
+    const key = process.env.ABUSEIPDB_API_KEY;
     if (!key || !ip) return null;
     return withTimeout((async () => {
         const resp = await axios.get('https://api.abuseipdb.com/api/v2/check', {
@@ -188,13 +211,87 @@ const getDnsIntel = async (domain, ip) => withTimeout((async () => {
 const getCommunityReportSummary = async (domain) => {
     try {
         if (!db) return { reportCount: 0 };
-        const count = await db.collection('community_reports').countDocuments({ domain });
-        const latest = await db.collection('community_reports').find({ domain }).sort({ time: -1 }).limit(3).toArray();
-        return { reportCount: count, latest: latest.map(x => ({ reason: x.reason, time: x.time })) };
+        const count = await db.collection('reports').countDocuments({ domain, status: { $ne: 'rejected' } });
+        const latest = await db.collection('reports').find({ domain, status: { $ne: 'rejected' } }).sort({ createdAt: -1 }).limit(3).toArray();
+        return { reportCount: count, latest: latest.map(x => ({ category: x.category, description: x.description, time: x.createdAt })) };
     } catch (_) { return { reportCount: 0 }; }
 };
 
-app.post(`/${config.get("app.version")}/initSession`, (req, res) => {
+const REPORT_CATEGORIES = new Set([
+    'phishing_login',
+    'scam_fraud',
+    'malware',
+    'fake_store',
+    'spam',
+    'suspicious_website',
+    'other'
+]);
+
+const getClientIp = (req) => {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) return String(forwarded).split(',')[0].trim();
+    return String(req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.ip || req.connection.remoteAddress || '')
+        .replace(/^::ffff:/, '')
+        .trim();
+};
+
+const isPrivateIp = (ip) => /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|::1|localhost)/.test(String(ip || ''));
+
+const lookupGeoIp = async (ip) => {
+    try {
+        if (!ip || isPrivateIp(ip)) return { country: '', region: '', city: '' };
+        const resp = await axios.get(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,regionName,city`, { timeout: 2500 });
+        if (!resp.data || resp.data.status !== 'success') return { country: '', region: '', city: '' };
+        return { country: resp.data.country || '', region: resp.data.regionName || '', city: resp.data.city || '' };
+    } catch (_) {
+        return { country: '', region: '', city: '' };
+    }
+};
+
+const buildDeviceFingerprint = (req, ip) => {
+    const raw = [
+        req.body && req.body.deviceId || '',
+        req.headers['user-agent'] || '',
+        req.headers['accept-language'] || '',
+        req.body && req.body.browserLanguage || '',
+        ip || ''
+    ].join('|');
+    return crypto.createHash('sha256').update(raw).digest('hex');
+};
+
+const validateReportPayload = (body) => {
+    const urlValue = String(body.url || '').trim();
+    let parsed;
+    try { parsed = new URL(urlValue); } catch (_) { return { error: 'URL không hợp lệ.' }; }
+    if (!['http:', 'https:'].includes(parsed.protocol)) return { error: 'URL không hợp lệ.' };
+    if (urlValue.length > maxLengthUrl) return { error: 'URL không hợp lệ.' };
+
+    const domain = normalizeHostname(body.domain || parsed.hostname);
+    if (!domain || domain !== normalizeHostname(parsed.hostname)) return { error: 'URL không hợp lệ.' };
+
+    const category = String(body.category || '').trim();
+    if (!REPORT_CATEGORIES.has(category)) return { error: 'Vui lòng chọn loại báo cáo.' };
+
+    const description = String(body.description || '').trim();
+    if (description.length < 20) return { error: 'Mô tả phải có tối thiểu 20 ký tự.' };
+    if (description.length > 1000) return { error: 'Mô tả không được vượt quá 1000 ký tự.' };
+
+    return { url: parsed.href, domain, category, description };
+};
+
+const saveReportScreenshot = async (file) => {
+    if (!file) return '';
+    const extMap = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/webp': '.webp' };
+    const ext = extMap[file.mimetype] || path.extname(file.originalname || '').toLowerCase();
+    if (!['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) throw new Error('UNSUPPORTED_REPORT_IMAGE');
+    const uploadDir = path.join(__dirname, 'public', 'report-screenshots');
+    await fs.promises.mkdir(uploadDir, { recursive: true });
+    const filename = `${Date.now()}-${crypto.randomBytes(12).toString('hex')}${ext === '.jpeg' ? '.jpg' : ext}`;
+    await fs.promises.writeFile(path.join(uploadDir, filename), file.buffer);
+    return `/report-screenshots/${filename}`;
+};
+
+app.post(`/${APP_VERSION}/initSession`, (req, res) => {
     const { app, secret } = req.body;
     const client = clients.find(u => { return u.app === app && u.secret === secret });
 
@@ -219,7 +316,7 @@ app.post(`/${config.get("app.version")}/initSession`, (req, res) => {
 
 
         res.json({
-            version: config.get("app.version"),
+            version: APP_VERSION,
             requestedOn: new Date(),
             token: accessToken,
             refresh: refreshToken,
@@ -227,13 +324,13 @@ app.post(`/${config.get("app.version")}/initSession`, (req, res) => {
     }
     else {
         res.status(status.FORBIDDEN).send({
-            version: config.get("app.version"),
+            version: APP_VERSION,
             requestedOn: new Date(),
             message: `Client application credential incorrect. ${status['401_MESSAGE']}`});
     }
 });
 
-app.post(`/${config.get("app.version")}/token`, (req, res) => {
+app.post(`/${APP_VERSION}/token`, (req, res) => {
     const { token } = req.body;
 
     if (!token) {
@@ -260,41 +357,41 @@ app.post(`/${config.get("app.version")}/token`, (req, res) => {
 
         res.json({
             status: status.OK,
-            version: config.get("app.version"),
+            version: APP_VERSION,
             requestedOn: new Date(),
             token: accessToken
         });
     });
 });
 
-app.post(`/${config.get("app.version")}/closeSession`, (req, res) => {
+app.post(`/${APP_VERSION}/closeSession`, (req, res) => {
     const { token } = req.body;
     refreshTokens = refreshTokens.filter(t => t !== token);
 
     res.status(status.OK).send({
         status: status.OK,
-        version: config.get("app.version"),
+        version: APP_VERSION,
         requestedOn: new Date(),
         message: "Session closed"
       });
 });
 
-app.get(`/${config.get("app.version")}/ping`, function(req, res){
+app.get(`/${APP_VERSION}/ping`, function(req, res){
   res.status(status.OK).send({
       status: status.OK,
-      version: config.get("app.version"),
+      version: APP_VERSION,
       requestedOn: new Date(),
     });
 })
 
-app.post(`/${config.get("app.version")}/rate`, authenticateJWT, function(req, res) {
+app.post(`/${APP_VERSION}/rate`, authenticateJWT, function(req, res) {
     //TODO: store request to file
     const params = {  time: new Date(), ...req.body, ip: req.ip};
     const msg = validateSubmitting(params);
     if (msg.indexOf("ok") == -1) {
         res.status(status.BAD_REQUEST).send({
             status: status.BAD_REQUEST,
-            version: config.get("app.version"),
+            version: APP_VERSION,
             requestedOn: new Date(),
             "message": msg
         });
@@ -316,7 +413,7 @@ app.post(`/${config.get("app.version")}/rate`, authenticateJWT, function(req, re
 
         res.status(status.OK).send({
             status: status.OK,
-            version: config.get("app.version"),
+            version: APP_VERSION,
             requestedOn: new Date(),
             "message":"ok"
         });
@@ -324,7 +421,7 @@ app.post(`/${config.get("app.version")}/rate`, authenticateJWT, function(req, re
 })
 
 
-app.get(`/${config.get("app.version")}/intel`, async function(req, res) {
+app.get(`/${APP_VERSION}/intel`, async function(req, res) {
     try {
         const rawUrl = req.query.url || req.query.domain;
         if (!rawUrl || String(rawUrl).length > maxLengthUrl) return res.sendStatus(status.BAD_REQUEST);
@@ -340,7 +437,7 @@ app.get(`/${config.get("app.version")}/intel`, async function(req, res) {
         ]);
         res.status(status.OK).send({
             status: status.OK,
-            version: config.get("app.version"),
+            version: APP_VERSION,
             requestedOn: new Date(),
             domain,
             domainAge,
@@ -350,23 +447,66 @@ app.get(`/${config.get("app.version")}/intel`, async function(req, res) {
         });
     } catch (err) {
         console.log('intel error', err && err.message);
-        res.status(status.OK).send({ status: status.OK, version: config.get("app.version"), requestedOn: new Date(), malware: { dangerous: false, sources: [] }, community: { reportCount: 0 } });
+        res.status(status.OK).send({ status: status.OK, version: APP_VERSION, requestedOn: new Date(), malware: { dangerous: false, sources: [] }, community: { reportCount: 0 } });
     }
 });
 
-app.post(`/${config.get("app.version")}/community-report`, apiLimiter, async function(req, res) {
+app.post('/api/report', reportLimiter, function(req, res, next) {
+    reportUpload.single('screenshot')(req, res, function(err) {
+        if (!err) return next();
+        if (err.code === 'LIMIT_FILE_SIZE') return res.status(status.BAD_REQUEST).send({ message: 'File vượt quá 5MB.' });
+        if (err.message === 'UNSUPPORTED_REPORT_IMAGE') return res.status(status.BAD_REQUEST).send({ message: 'Định dạng ảnh không được hỗ trợ.' });
+        return res.status(status.BAD_REQUEST).send({ message: 'Không thể gửi báo cáo. Vui lòng thử lại.' });
+    });
+}, async function(req, res) {
     try {
-        const rawUrl = req.body.url || req.body.domain;
-        const domain = normalizeHostname(rawUrl);
-        const reason = String(req.body.reason || '').trim().slice(0, 300);
-        if (!domain || !reason) return res.status(status.BAD_REQUEST).send({ message: 'domain and reason are required' });
-        const params = { domain, reason, url: String(req.body.url || '').slice(0, maxLengthUrl), time: new Date(), ip: req.ip, client: req.headers['user-agent'] || '' };
-        if (db) await db.collection('community_reports').insertOne(params);
-        const community = await getCommunityReportSummary(domain);
-        res.status(status.OK).send({ status: status.OK, version: config.get("app.version"), requestedOn: new Date(), message: 'ok', domain, community });
+        const validated = validateReportPayload(req.body || {});
+        if (validated.error) return res.status(status.BAD_REQUEST).send({ message: validated.error });
+        if (!db) return res.status(status.SERVICE_UNAVAILABLE).send({ message: 'Không thể gửi báo cáo. Vui lòng thử lại.' });
+
+        const ip = getClientIp(req);
+        const geo = await lookupGeoIp(ip);
+        const deviceFingerprint = buildDeviceFingerprint(req, ip);
+        const now = new Date();
+        const screenshotUrl = await saveReportScreenshot(req.file);
+
+        const report = {
+            url: validated.url,
+            domain: validated.domain,
+            category: validated.category,
+            description: validated.description,
+            screenshotUrl,
+            status: 'pending',
+            ip,
+            country: geo.country,
+            region: geo.region,
+            city: geo.city,
+            deviceFingerprint,
+            extensionVersion: String(req.body.extensionVersion || '').slice(0, 50),
+            browserName: String(req.body.browserName || '').slice(0, 80),
+            browserLanguage: String(req.body.browserLanguage || '').slice(0, 40),
+            userAgent: String(req.body.userAgent || req.headers['user-agent'] || '').slice(0, 500),
+            pageTitle: String(req.body.pageTitle || '').slice(0, 300),
+            clientTimestamp: req.body.timestamp ? new Date(req.body.timestamp) : null,
+            createdAt: now,
+            updatedAt: now
+        };
+
+        await db.collection('reports').insertOne(report);
+        res.status(status.OK).send({
+            status: status.OK,
+            version: APP_VERSION,
+            requestedOn: new Date(),
+            message: 'Báo cáo đã được gửi thành công.',
+            reportId: report._id,
+            domain: report.domain
+        });
     } catch (err) {
-        console.log('community-report error', err && err.message);
-        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'could not store report' });
+        if (err && err.code === 11000) {
+            return res.status(status.CONFLICT).send({ message: 'Bạn đã gửi báo cáo cho tên miền này trước đó.' });
+        }
+        console.log('report error', err && err.message);
+        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể gửi báo cáo. Vui lòng thử lại.' });
     }
 });
 
@@ -376,7 +516,7 @@ app.post(`/${config.get("app.version")}/community-report`, apiLimiter, async fun
  * @param {String} typelist  type of list we wanna get ('blacklist' or 'whitelist')
  * @return {JSON} array of objects
  */
-app.get(`/${config.get("app.version")}/:typelist`, function(req, res) {
+app.get(`/${APP_VERSION}/:typelist`, function(req, res) {
     let type = null
     switch (req.params.typelist) {
         case "blacklist":
@@ -398,11 +538,11 @@ app.get(`/${config.get("app.version")}/:typelist`, function(req, res) {
 
 })
 
-app.post(`/${config.get("app.version")}/res/:resId`, authenticateJWT, function(req, res) {
+app.post(`/${APP_VERSION}/res/:resId`, authenticateJWT, function(req, res) {
     if (!req.params.resId || ['blacklist', 'whitelist'].indexOf(req.params.resId) == -1) {
         res.status(status.NOT_FOUND).send({
             status: status.NOT_FOUND,
-            version: config.get("app.version"),
+            version: APP_VERSION,
             requestedOn: new Date(),
             message: `${req.params.resId} not found`
         });
@@ -415,7 +555,7 @@ app.post(`/${config.get("app.version")}/res/:resId`, authenticateJWT, function(r
         if (data) {
             return res.status(status.OK).send({
                 status: status.OK,
-                version: config.get("app.version"),
+                version: APP_VERSION,
                 requestedOn: new Date(),
                 data
             });
@@ -423,7 +563,7 @@ app.post(`/${config.get("app.version")}/res/:resId`, authenticateJWT, function(r
     });
 });
 
-app.post(`/${config.get("app.version")}/importFiles/:typelist`,  upload.single('file'), async (req, res) => {
+app.post(`/${APP_VERSION}/importFiles/:typelist`,  upload.single('file'), async (req, res) => {
     const rawData = req.file.buffer.toString();
     const chunkData = _.chunk(JSON.parse(rawData), 1000);
     switch (req.params.typelist) {
@@ -452,7 +592,7 @@ app.post(`/${config.get("app.version")}/importFiles/:typelist`,  upload.single('
     res.status(status.OK).send({message: 'INSERT SUCCESS'});
 })
 
-app.post(`/${config.get("app.version")}/safecheck`, function(req, res) {
+app.post(`/${APP_VERSION}/safecheck`, function(req, res) {
     let { url } = req.body;
 
     if(!url || url.length > maxLengthUrl) {
@@ -544,7 +684,7 @@ app.post(`/${config.get("app.version")}/safecheck`, function(req, res) {
     })
 });
 
-app.post(`/${config.get("app.version")}/safecheck-phishtank`, function(req, res) {
+app.post(`/${APP_VERSION}/safecheck-phishtank`, function(req, res) {
     // https://www.phishtank.com/developer_info.php
     let { url } = req.body;
     url = preProcessDomainUrl(url);
@@ -568,7 +708,7 @@ app.post(`/${config.get("app.version")}/safecheck-phishtank`, function(req, res)
     });            
 });
 
-app.post(`/${config.get("app.version")}/safecheck-hellsh`, function(req, res) {
+app.post(`/${APP_VERSION}/safecheck-hellsh`, function(req, res) {
     // https://hell.sh/hosts/
     let { url } = req.body;
     url = preProcessDomainUrl(url);
@@ -592,7 +732,7 @@ app.post(`/${config.get("app.version")}/safecheck-hellsh`, function(req, res) {
     });            
 });
 
-app.post(`/${config.get("app.version")}/safecheck-oisd`, function(req, res) {
+app.post(`/${APP_VERSION}/safecheck-oisd`, function(req, res) {
     // https://oisd.nl/?p=dl
     let { url } = req.body;
     url = preProcessDomainUrl(url);
@@ -616,7 +756,7 @@ app.post(`/${config.get("app.version")}/safecheck-oisd`, function(req, res) {
     });            
 });
 
-app.post(`/${config.get("app.version")}/safecheck-matrix`, function(req, res) {
+app.post(`/${APP_VERSION}/safecheck-matrix`, function(req, res) {
     // https://github.com/mypdns/matrix/tree/master/source
     let { url } = req.body;
     url = preProcessDomainUrl(url);
@@ -757,7 +897,7 @@ app.post(`/${config.get("app.version")}/safecheck-matrix`, function(req, res) {
     });
 });
 
-app.post(`/${config.get("app.version")}/safecheck-segasec`, function(req, res) {
+app.post(`/${APP_VERSION}/safecheck-segasec`, function(req, res) {
     // https://github.com/Segasec/feed
     let { url } = req.body;
     let rawUrl = url;
@@ -815,7 +955,7 @@ app.post(`/${config.get("app.version")}/safecheck-segasec`, function(req, res) {
     });
 });
 
-app.post(`/${config.get("app.version")}/safecheck-energized`, function(req, res) {
+app.post(`/${APP_VERSION}/safecheck-energized`, function(req, res) {
     // https://energized.pro/
     let { url } = req.body;
     url = preProcessDomainUrl(url);
@@ -839,19 +979,6 @@ app.post(`/${config.get("app.version")}/safecheck-energized`, function(req, res)
         }
     });
 
-    // let energizedPromise = new Promise((resolve, reject) => {
-    //     readFile('./config/energizedData.txt', (err, data) => {
-    //         if (err) throw err;
-    //         if (data) {
-    //             const rawData = data.toString().split('\n');
-    //             if(rawData[59].split(",").includes(url)) {
-    //                 resolve(false);
-    //             }
-    //         } else {
-    //             resolve(true)
-    //         }
-    //     })
-    // })
 });
 
 const preProcessDomainUrl = (url) => {
@@ -889,8 +1016,24 @@ function validateSubmitting(params) {
 
 
 var db = null;
-const url = `mongodb://${config.get("db.username")}:${config.get("db.password")}@${config.get("db.url")}:${config.get("db.port")}/${config.get("db.name")}`;
-MongoClient.connect(url, {
+const mongoUsername = process.env.MONGO_USERNAME || config.get("db.username");
+const mongoPassword = process.env.MONGO_PASSWORD || config.get("db.password");
+const mongoHost = process.env.MONGO_HOST || config.get("db.url");
+const mongoPort = process.env.MONGO_PORT || config.get("db.port");
+const fallbackMongoDatabase = process.env.MONGO_DATABASE || config.get("db.name");
+const mongoUrl = process.env.MONGO_URI || `mongodb://${mongoUsername}:${mongoPassword}@${mongoHost}:${mongoPort}/${fallbackMongoDatabase}`;
+const getMongoDatabaseName = () => {
+    if (process.env.MONGO_DATABASE) return process.env.MONGO_DATABASE;
+    if (process.env.MONGO_URI) {
+        try {
+            const parsed = new URL(process.env.MONGO_URI);
+            const dbName = decodeURIComponent((parsed.pathname || '').replace(/^\//, '').trim());
+            if (dbName) return dbName;
+        } catch (_) {}
+    }
+    return fallbackMongoDatabase;
+};
+MongoClient.connect(mongoUrl, {
     useUnifiedTopology: true,
 }, (err, database) => {
     // ... start the server
@@ -899,7 +1042,9 @@ MongoClient.connect(url, {
         return;
     }
 
-    db = database.db(config.get("db.name"));
-    console.info("Launch the API Server at ", config.get("app.domain"), ":", config.get("app.port"));
-    app.listen(config.get("app.port"));
+    db = database.db(getMongoDatabaseName());
+    db.collection('reports').createIndex({ deviceFingerprint: 1, domain: 1 }, { unique: true }).catch(err => console.log('reports index error', err && err.message));
+    db.collection('reports').createIndex({ domain: 1, createdAt: -1 }).catch(err => console.log('reports domain index error', err && err.message));
+    console.info("Launch the API Server at ", APP_DOMAIN, ":", APP_PORT);
+    app.listen(APP_PORT);
  });

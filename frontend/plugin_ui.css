@@ -488,3 +488,141 @@ a:hover {
   opacity: 0.95;
   color: var(--text-main);
 }
+
+/* Report URL cộng đồng — mở rộng theo phong cách hiện tại, không thay đổi Scan URL */
+.report-current-target {
+  border: 1px solid var(--border-soft);
+  border-radius: 1.2rem;
+  background: var(--dark-bg);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.report-info-row {
+  display: flex;
+  gap: 0.8rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.35rem 0;
+}
+.report-info-label {
+  flex: 0 0 12.5rem;
+  color: var(--muted-text);
+  font-size: 1.18rem;
+  font-weight: 800;
+}
+.report-info-value {
+  flex: 1;
+  color: var(--text-main);
+  font-size: 1.2rem;
+  font-weight: 700;
+  text-align: right;
+  word-break: break-all;
+}
+.report-field-label {
+  display: block;
+  margin: 1rem 0 0.45rem;
+  color: var(--text-main);
+  font-size: 1.22rem;
+  font-weight: 800;
+}
+.required-mark { color: #dc2626; }
+.optional-mark { color: var(--muted-text); font-weight: 600; }
+.report-input {
+  width: 100%;
+  padding: 1rem;
+  border-radius: 1.2rem;
+  border: 1px solid var(--border-soft);
+  background: var(--dark-bg);
+  color: var(--text-main);
+  font-size: 1.3rem;
+  outline: none;
+}
+#reportCategory {
+  min-height: 4rem;
+  cursor: pointer;
+}
+#reportDescription {
+  min-height: 13rem;
+  resize: vertical;
+}
+.report-input:focus,
+#reportCategory:focus,
+#reportDescription:focus {
+  border-color: var(--neon-blue);
+  box-shadow: 0 0 0 3px var(--neon-blue-glow);
+}
+.report-hint {
+  margin-top: 0.45rem;
+  color: var(--muted-text);
+  font-size: 1.12rem;
+  line-height: 1.35;
+}
+.report-counter {
+  margin-top: 0.35rem;
+  color: var(--muted-text);
+  font-size: 1.08rem;
+  text-align: right;
+}
+.report-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+.report-upload-btn,
+.report-remove-image {
+  min-height: 3.5rem;
+  border-radius: 999px;
+  padding: 0.78rem 1.22rem;
+  font-size: 1.22rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.12s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.report-upload-btn {
+  margin: 0;
+  border: 1px solid var(--neon-blue);
+  color: var(--neon-blue);
+  background: transparent;
+}
+.report-upload-btn:hover,
+.report-remove-image:hover {
+  box-shadow: 0 8px 18px rgba(0,0,0,0.12);
+}
+.report-file-name {
+  color: var(--muted-text);
+  font-size: 1.12rem;
+  word-break: break-word;
+}
+.report-image-preview-wrap {
+  margin-top: 0.9rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.report-image-preview-wrap[hidden] { display: none !important; }
+.report-image-preview {
+  max-width: 18rem;
+  max-height: 12rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border-soft);
+  object-fit: cover;
+  background: var(--dark-bg);
+}
+.report-remove-image {
+  border: 1px solid var(--border-soft);
+  color: var(--text-main);
+  background: transparent;
+}
+#reportStatus {
+  white-space: pre-line;
+}
+#reportStatus.success { color: var(--neon-green); font-weight: 700; }
+#reportStatus.error { color: #dc2626; font-weight: 700; }
+#reportStatus.loading { color: var(--muted-text); }
+:root[data-theme="light"] .report-current-target,
+:root[data-theme="light"] .report-input,
+:root[data-theme="light"] .report-image-preview {
+  border-color: var(--border-soft);
+}

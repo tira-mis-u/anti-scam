@@ -548,9 +548,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   if (request.type === 'COMMUNITY_REPORT') {
     const payload = request.payload || {};
-    fetch(`${BACKEND_BASE}/v1/community-report`, {
+    fetch(`${BACKEND_BASE}/api/report`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: payload.url, domain: payload.domain, reason: payload.reason })
+      body: JSON.stringify(payload)
     }).then(r => r.json()).then(data => sendResponse({ ok:true, data })).catch(err => {
       logger.warn('COMMUNITY_REPORT', err.message); sendResponse({ ok:false });
     });

@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: anti-scam-api
+    env: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ACCESS_TOKEN_SECRET
+        sync: false
+      - key: REFRESH_TOKEN_SECRET
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DATABASE
+        value: antiscam
