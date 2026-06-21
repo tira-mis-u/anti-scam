@@ -324,7 +324,7 @@ const validateReportPayload = (body) => {
     if (!['http:', 'https:'].includes(parsed.protocol)) return { error: 'URL không hợp lệ.' };
     if (urlValue.length > maxLengthUrl) return { error: 'URL không hợp lệ.' };
 
-    const domain = normalizeHostname(body.domain || parsed.hostname);
+    const domain = normalizeHostname(String(body.domain || parsed.hostname));
     if (!domain || domain !== normalizeHostname(parsed.hostname)) return { error: 'URL không hợp lệ.' };
 
     const category = String(body.category || '').trim();
@@ -346,7 +346,7 @@ const validateAdminReportPayload = (body) => {
     if (parsed.href.length > maxLengthUrl) return { error: 'URL quá dài.' };
 
     const urlDomain = normalizeHostname(parsed.hostname);
-    const providedDomain = normalizeHostname(body.domain || '');
+    const providedDomain = normalizeHostname(String(body.domain || ''));
     const domain = providedDomain || urlDomain;
     if (!domain) return { error: 'Domain không hợp lệ.' };
     if (providedDomain && providedDomain !== urlDomain && !urlDomain.endsWith('.' + providedDomain)) {

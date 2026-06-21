@@ -9,7 +9,8 @@
     "webRequest",
     "notifications",
     "declarativeNetRequest",
-    "downloads"
+    "downloads",
+    "geolocation"
   ],
   "host_permissions": [
     "*://*/*"
@@ -53,8 +54,5 @@
     "48": "assets/antiScamLogo.png",
     "128": "assets/antiScamLogo.png"
   },
-  "manifest_version": 3,
-  "optional_permissions": [
-    "geolocation"
-  ]
+  "manifest_version": 3
 }

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AntiScam - Bảo vệ bạn khỏi lừa đảo trực tuyến</title>
+  <meta name="description" content="Tiện ích mở rộng giúp nhận diện website giả mạo, lừa đảo và mã độc dựa trên phân tích hành vi thời gian thực.">
+  <link rel="icon" type="image/png" href="assets/antiScamLogo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- NAVBAR -->
+  <nav>
+    <div class="nav-inner">
+      <div class="nav-brand">
+        <div class="logo"><i class="fa-solid fa-shield-halved" style="color:#fff;"></i></div>
+        <span>AntiScam</span>
+      </div>
+      <div class="nav-links">
+        <a href="#features">Tính năng</a>
+        <a href="#how">Cách hoạt động</a>
+        <a href="#signals">Tín hiệu</a>
+        <a href="#about">Về chúng tôi</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge"><span class="dot"></span> Mã nguồn mở - Miễn phí</div>
+      <h1>Duyệt web an toàn hơn với<br><em>AntiScam</em></h1>
+      <p>Tiện ích giúp bạn phát hiện các trang web giả mạo, lừa đảo và đánh cắp thông tin cá nhân ngay lập tức.</p>
+      <div class="hero-btns">
+        <a href="https://github.com/tira-mis-u/anti-scam/tags" target="_blank" class="btn btn-primary"><i class="fa-solid fa-download"></i> Cài đặt ngay</a>
+        <a href="https://github.com/tira-mis-u/anti-scam" target="_blank" class="btn btn-secondary"><i class="fa-solid fa-code"></i> Xem mã nguồn</a>
+      </div>
+
+      <!-- HERO VISUAL: Scan Preview -->
+      <div class="hero-visual">
+        <div class="visual-content">
+          <div class="scan-bar">
+            <span class="url">https://phishing-example.com/login</span>
+            <span class="status"><span class="dot"></span> Đang quét...</span>
+          </div>
+          <div class="score-row">
+            <div class="score-card risk">
+              <div class="label">Risk Score</div>
+              <div class="value">87</div>
+            </div>
+            <div class="score-card safe">
+              <div class="label">Trust Score</div>
+              <div class="value">12</div>
+            </div>
+            <div class="score-card conf">
+              <div class="label">Confidence</div>
+              <div class="value">94%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section class="features" id="features">
+    <div class="container">
+      <div class="section-label">Tính năng</div>
+      <h2 class="section-title">Quét toàn diện, cảnh báo tức thì</h2>
+      <p class="section-desc">Kết hợp mô hình học máy, heuristic engine và threat intelligence để đánh giá mức độ tin cậy của mọi website.</p>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon fi-red"><i class="fa-solid fa-magnifying-glass"></i></div>
+          <h3>Đánh giá độ tin cậy</h3>
+          <p>Phân loại website theo nhiều mức độ an toàn. Kết hợp điểm rủi ro và các nhóm tín hiệu để đưa ra kết luận chính xác nhất.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon fi-blue"><i class="fa-solid fa-globe"></i></div>
+          <h3>Quét tên miền & URL</h3>
+          <p>Kiểm tra chuyên sâu HTTPS, địa chỉ IP, tên miền rút gọn và các ký tự lạ nhằm phát hiện các thủ đoạn lừa đảo tinh vi.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon fi-orange"><i class="fa-solid fa-masks-theater"></i></div>
+          <h3>Nhận diện giả mạo</h3>
+          <p>Cảnh báo ngay khi trang web có dấu hiệu nhái logo, tiêu đề hoặc giao diện của các thương hiệu lớn như ngân hàng, ví điện tử.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon fi-purple"><i class="fa-solid fa-tower-broadcast"></i></div>
+          <h3>Giám sát hành vi</h3>
+          <p>Theo dõi các kết nối mạng ngầm để phát hiện hành vi gửi dữ liệu cá nhân của bạn ra các máy chủ không xác định.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon fi-yellow"><i class="fa-solid fa-shield-heart"></i></div>
+          <h3>Danh sách đen cập nhật</h3>
+          <p>Tích hợp các nguồn dữ liệu uy tín và báo cáo từ cộng đồng để chặn đứng các trang web độc hại ngay khi chúng vừa xuất hiện.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon fi-green"><i class="fa-solid fa-users"></i></div>
+          <h3>Cùng nhau bảo vệ</h3>
+          <p>Mọi người dùng đều có thể đóng góp báo cáo website xấu, giúp hệ thống ngày càng hoàn thiện và bảo vệ cộng đồng tốt hơn.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="how-it-works" id="how">
+    <div class="container">
+      <div class="section-label">Cách hoạt động</div>
+      <h2 class="section-title">3 bước đơn giản</h2>
+      <p class="section-desc">Cài đặt một lần, bảo vệ mãi mãi - không cần cấu hình.</p>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <h3>Cài đặt tiện ích</h3>
+          <p>Thêm AntiScam vào trình duyệt của bạn. Hoàn toàn miễn phí và mã nguồn mở.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <h3>Duyệt web an toàn</h3>
+          <p>Hệ thống tự động phân tích mọi trang web bạn truy cập để tìm mã độc và dấu hiệu lừa đảo.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <h3>Nhận cảnh báo</h3>
+          <p>Nếu phát hiện nguy hiểm, AntiScam sẽ hiển thị cảnh báo ngay lập tức để bảo vệ bạn.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SIGNALS -->
+  <section class="signals" id="signals">
+    <div class="container">
+      <div class="section-label">Tín hiệu cảnh báo</div>
+      <h2 class="section-title">Minh bạch và rõ ràng</h2>
+      <p class="section-desc">Phân loại tín hiệu giúp bạn dễ dàng nhận biết mức độ rủi ro.</p>
+
+      <div class="signals-grid">
+        <div class="signal-item">
+          <span class="signal-dot sd-red"></span>
+          <div>
+            <div class="st"><i class="fa-solid fa-ban"></i> Danh sách đen</div>
+            <div class="sd">Website đã được xác nhận lừa đảo hoặc giả mạo</div>
+          </div>
+        </div>
+        <div class="signal-item">
+          <span class="signal-dot sd-orange"></span>
+          <div>
+            <div class="st"><i class="fa-solid fa-circle-exclamation"></i> Nội dung nhạy cảm</div>
+            <div class="sd">Trang chứa nội dung không phù hợp hoặc rủi rro</div>
+          </div>
+        </div>
+        <div class="signal-item">
+          <span class="signal-dot sd-green"></span>
+          <div>
+            <div class="st"><i class="fa-solid fa-circle-check"></i> Đã xác thực</div>
+            <div class="sd">Địa chỉ tin cậy, đã được kiểm tra an toàn</div>
+          </div>
+        </div>
+        <div class="signal-item">
+          <span class="signal-dot sd-red"></span>
+          <div>
+            <div class="st"><i class="fa-solid fa-triangle-exclamation"></i> Nguy cơ cao</div>
+            <div class="sd">Phát hiện nhiều dấu hiệu bất thường, cần thận trọng</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ABOUT US -->
+  <section class="about-us" id="about">
+    <div class="container">
+      <div class="section-label">Đội ngũ phát triển</div>
+      <h2 class="section-title">Về chúng tôi</h2>
+      <p class="section-desc">Chúng tôi là tập thể những người yêu công nghệ và quan tâm đến sự an toàn của cộng đồng mạng.</p>
+      
+      <div class="about-card">
+        <div class="about-content">
+          <div class="about-info">
+            <div class="about-icon"><i class="fa-solid fa-users-gear"></i></div>
+            <div>
+              <h3>Nhóm 12 Kỹ Năng Mềm - Nhóm máu O Open</h3>
+              <p>Một nhóm sinh viên đầy nhiệt huyết, tập trung vào việc áp dụng các kỹ năng mềm và tư duy mở để giải quyết các vấn đề thực tế trong xã hội số.</p>
+            </div>
+          </div>
+          <hr style="border: none; border-top: 1px solid var(--card-border); margin: 24px 0;">
+          <div class="about-lead">
+            <div class="lead-avatar"><i class="fa-solid fa-user-code"></i></div>
+            <div>
+              <h4>Lê Nguyễn Minh Trí</h4>
+              <p>Chịu trách nhiệm lập trình chính (Lead Developer) và kiến trúc hệ thống.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta" id="install">
+    <div class="container">
+      <div class="cta-box">
+        <h2>Bảo vệ trình duyệt của bạn ngay</h2>
+        <p>AntiScam là dự án mã nguồn mở, hoàn toàn miễn phí và tôn trọng quyền riêng tư.</p>
+        <a href="https://github.com/tira-mis-u/anti-scam/tags" target="_blank" class="btn btn-primary" style="position:relative;"><i class="fa-solid fa-download"></i> Tải xuống và Cài đặt</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="container">
+      <p>© 2026 AntiScam - Mã nguồn mở tại <a href="https://github.com/tira-mis-u/anti-scam" target="_blank">GitHub</a></p>
+      <p style="margin-top:8px;">Phát triển dựa trên các tiêu chuẩn bảo mật cộng đồng.</p>
+    </div>
+  </footer>
+
+  <script src="js/script.js"></script>
+</body>
+</html>

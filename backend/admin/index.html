@@ -364,14 +364,14 @@
         : src === 'gps-coords-ip-fallback'
         ? '<span style="color:#f59e0b;font-weight:700">📍 GPS + IP fallback</span>'
         : '<span style="color:#94a3b8">🌐 IP (ước lượng)</span>';
-      const cityRegion = [r.city, r.region, r.country].filter(Boolean).join(', ');
+      const cityRegion = [r.city, r.region, r.country].filter(Boolean).map(escapeHtml).join(', ');
       const coords = (r.latitude != null && r.longitude != null)
-        ? '<br><small style="color:#94a3b8">Tọa độ: ' + r.latitude.toFixed(4) + ', ' + r.longitude.toFixed(4) + ' (±' + (r.gpsAccuracy || '?') + 'm)</small>'
+        ? '<br><small style="color:#94a3b8">Tọa độ: ' + Number(r.latitude).toFixed(4) + ', ' + Number(r.longitude).toFixed(4) + ' (±' + (Number(r.gpsAccuracy) || '?') + 'm)</small>'
         : '';
       const fullAddr = r.fullAddress
         ? '<br><small style="color:#cbd5e1">' + escapeHtml(r.fullAddress) + '</small>'
         : '';
-      return badge + (cityRegion ? '<br>' + escapeHtml(cityRegion) : '') + coords + fullAddr;
+      return badge + (cityRegion ? '<br>' + cityRegion : '') + coords + fullAddr;
     }
 
     function fmtDate(value) {

@@ -4,6 +4,7 @@
 <head>
   <meta charset="utf-8">
   <title>AntiScam</title>
+  <link rel="icon" type="image/png" href="assets/antiScamLogo.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Asap:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
@@ -55,21 +56,54 @@
               </div>
             </div>
 
+            <label class="report-field-label">Trạng thái website <span class="required-mark">*</span></label>
+            <div class="report-type-selector">
+              <label class="report-type-option">
+                <input type="radio" name="reportType" value="malicious" checked>
+                <div class="report-type-card malicious">
+                  <span>Độc hại</span>
+                </div>
+              </label>
+              <label class="report-type-option">
+                <input type="radio" name="reportType" value="safe">
+                <div class="report-type-card safe">
+                  <span>An toàn</span>
+                </div>
+              </label>
+            </div>
+
             <label class="report-field-label" for="reportCategory">Loại báo cáo <span class="required-mark">*</span></label>
-            <select id="reportCategory" class="report-input" required>
-              <option value="">Chọn loại báo cáo</option>
-              <option value="phishing_login">Giả mạo đăng nhập (Phishing)</option>
-              <option value="scam_fraud">Lừa đảo (Scam/Fraud)</option>
-              <option value="malware">Phát tán mã độc (Malware)</option>
-              <option value="fake_store">Cửa hàng giả mạo</option>
-              <option value="spam">Spam</option>
-              <option value="suspicious_website">Website đáng ngờ</option>
-              <option value="other">Khác</option>
-            </select>
+            <div class="report-select-wrapper">
+              <select id="reportCategory" class="report-input report-select" required>
+                <option value="" disabled selected>Chọn loại báo cáo</option>
+                <optgroup label="Website độc hại" id="maliciousCategories">
+                  <option value="phishing_login">Giả mạo đăng nhập (Phishing)</option>
+                  <option value="scam_fraud">Lừa đảo (Scam/Fraud)</option>
+                  <option value="malware">Phát tán mã độc (Malware)</option>
+                  <option value="fake_store">Cửa hàng giả mạo</option>
+                  <option value="spam">Spam</option>
+                </optgroup>
+                <optgroup label="Website an toàn" id="safeCategories" hidden>
+                  <option value="official_brand">Thương hiệu chính thức</option>
+                  <option value="bank_finance">Ngân hàng / Tài chính</option>
+                  <option value="e_commerce">Thương mại điện tử lớn</option>
+                  <option value="social_media">Mạng xã hội phổ biến</option>
+                  <option value="payment_gateway">Cổng thanh toán</option>
+                  <option value="educational">Giáo dục / Chính phủ</option>
+                  <option value="trusted_service">Dịch vụ tin cậy</option>
+                </optgroup>
+                <option value="other">Khác</option>
+              </select>
+            </div>
+
+            <div id="otherCategoryWrap" class="report-field-group" hidden>
+              <label class="report-field-label" for="reportCategoryOther">Lý do cụ thể <span class="required-mark">*</span></label>
+              <input type="text" id="reportCategoryOther" class="report-input" placeholder="Nhập lý do khác của bạn...">
+            </div>
 
             <label class="report-field-label" for="reportDescription">Mô tả chi tiết <span class="required-mark">*</span></label>
-            <textarea id="reportDescription" class="report-input" minlength="20" maxlength="1000" placeholder="Mô tả lý do bạn cho rằng website này nguy hiểm..."></textarea>
-            <div class="report-hint">Ví dụ: Website giả mạo ngân hàng, yêu cầu nhập OTP, mạo danh Shopee, dụ dỗ đầu tư tài chính.</div>
+            <textarea id="reportDescription" class="report-input" minlength="20" maxlength="1000" placeholder="Lý do bạn báo cáo website này..."></textarea>
+            <div class="report-hint" id="reportHint">Ví dụ: Website giả mạo ngân hàng, yêu cầu nhập OTP, mạo danh Shopee.</div>
             <div id="reportDescriptionCount" class="report-counter">0/1000 ký tự</div>
 
             <label class="report-field-label">Ảnh minh chứng <span class="optional-mark">(tùy chọn)</span></label>

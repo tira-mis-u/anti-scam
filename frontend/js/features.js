@@ -12,9 +12,6 @@
 // Gửi: ANALYSIS_RESULT (lần đầu) + ANALYSIS_UPDATE (real-time khi thay đổi)
 // ═══════════════════════════════════════════════════════════════════════════
 
-const url = window.location.href;
-const urlDomain = window.location.hostname;
-const onlyDomain = urlDomain.replace(/^www\./, '');
 const ipRe = /^(\d{1,3}\.){3}\d{1,3}$/;
 
 // ── Trusted CDN (fallback nội bộ — features.js không import heuristic.js) ──
@@ -58,9 +55,10 @@ const _isTrustedHost = (host) => {
 const _hostOf = (raw) => {
   if (!raw || typeof raw !== 'string') return null;
   const s = raw.trim();
+  const currentOnlyDomain = window.location.hostname.replace(/^www\./, '');
   if (s.startsWith('//')) { try { return new URL('https:' + s).hostname; } catch (_) { return null; } }
   if (s.startsWith('http://') || s.startsWith('https://')) { try { return new URL(s).hostname; } catch (_) { return null; } }
-  if (s.startsWith('/') || s === '') return onlyDomain;
+  if (s.startsWith('/') || s === '') return currentOnlyDomain;
   if (s.startsWith('data:') || s.startsWith('blob:') || s.startsWith('javascript:')) return null;
   return null;
 };
@@ -79,6 +77,8 @@ const VN_SCAM_CONTENT_PATTERNS = [
   { re: /viec\s*nhe\s*luong\s*cao|kiem\s*tien\s*online|khong\s*can\s*von|lam\s*nhiem\s*vu/, label: 'việc nhẹ lương cao/kiếm tiền online' },
   { re: /nhan\s*thuong|trung\s*thuong|nhan\s*qua|hoa\s*hong\s*khung|nap\s*tien\s*nhan\s*thuong/, label: 'nhận thưởng/hoa hồng bất thường' },
 ];
+
+const _stickyState = { contentRich: false, sensitiveForm: false, formHijack: false, obfuscatedScript: false, keylogger: false, clipboardHijack: false, suspiciousExternalScript: false, downloadFile: false, networkUploadToExternal: false, hiddenIframe: false };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // BRAND SURFACES — phát hiện giả mạo qua nhiều bề mặt
@@ -107,6 +107,7 @@ const BRAND_OFFICIAL = {
 
 const detectBrandSurfaces = () => {
   const title = (document.title || '').toLowerCase();
+  const currentOnlyDomain = window.location.hostname.replace(/^www\./, '');
   let h1 = '', h2 = '';
   try {
     const h1el = document.querySelector('h1'); if (h1el) h1 = (h1el.textContent || '').toLowerCase();
@@ -138,7 +139,7 @@ const detectBrandSurfaces = () => {
   for (const [key, name] of BRAND_KEYS) {
     if (key.length < 4 && !['fpt','acb'].includes(key)) continue;
     const official = BRAND_OFFICIAL[key] || [];
-    const isOfficial = official.some(d => onlyDomain === d || onlyDomain.endsWith('.' + d));
+    const isOfficial = official.some(d => currentOnlyDomain === d || currentOnlyDomain.endsWith('.' + d));
     if (isOfficial) continue;
     let count = 0;
     for (const surf of Object.values(surfaces)) {
@@ -157,19 +158,23 @@ const detectBrandSurfaces = () => {
 // COLLECT — thu thập toàn bộ tín hiệu (gọi mỗi lần quét)
 // ═══════════════════════════════════════════════════════════════════════════
 const collect = () => {
+  const currentUrl = window.location.href;
+  const currentDomain = window.location.hostname;
+  const currentOnlyDomain = currentDomain.replace(/^www\./, '');
+  
   const result = {}; // ML features (giữ key gốc cho model)
   const dom = { scanned: true };
 
   // ── ML features (cho model phụ) ──
-  result['IP Address'] = ipRe.test(onlyDomain) ? '1' : '-1';
-  result['URL Length'] = (url.length > 100) ? '0' : '-1';
-  result['Tiny URL'] = (onlyDomain.length < 5 && !ipRe.test(onlyDomain)) ? '0' : '-1';
-  result['@ Symbol'] = url.includes('@') ? '0' : '-1';
-  result['Redirecting using //'] = (url.lastIndexOf('//') > 7 && /\/\/[^/]+@/.test(url)) ? '0' : '-1';
-  result['(-) Prefix/Suffix in domain'] = ((onlyDomain.match(/-/g) || []).length >= 3) ? '0' : '-1';
-  result['No. of Sub Domains'] = ((onlyDomain.match(/\./g) || []).length >= 4) ? '0' : '-1';
+  result['IP Address'] = ipRe.test(currentOnlyDomain) ? '1' : '-1';
+  result['URL Length'] = (currentUrl.length > 100) ? '0' : '-1';
+  result['Tiny URL'] = (currentOnlyDomain.length < 5 && !ipRe.test(currentOnlyDomain)) ? '0' : '-1';
+  result['@ Symbol'] = currentUrl.includes('@') ? '0' : '-1';
+  result['Redirecting using //'] = (currentUrl.lastIndexOf('//') > 7 && /\/\/[^/]+@/.test(currentUrl)) ? '0' : '-1';
+  result['(-) Prefix/Suffix in domain'] = ((currentOnlyDomain.match(/-/g) || []).length >= 3) ? '0' : '-1';
+  result['No. of Sub Domains'] = ((currentOnlyDomain.match(/\./g) || []).length >= 4) ? '0' : '-1';
   result['HTTPS'] = (window.location.protocol === 'https:') ? '-1' : '0';
-  result['HTTPS in URL\'s domain part'] = (/https/i.test(onlyDomain)) ? '0' : '-1';
+  result['HTTPS in URL\'s domain part'] = (/https/i.test(currentOnlyDomain)) ? '0' : '-1';
   result['Favicon'] = '-1';
   result['Port'] = '-1';
   const port = window.location.port;
@@ -191,7 +196,7 @@ const collect = () => {
       if (!src) continue;
       totalCount++;
       const h = _hostOf(src);
-      if (h && h !== onlyDomain && !_hostEndsWith(h, onlyDomain) && !_sameOrgHost(h, onlyDomain) && !_isTrustedHost(h)) { extCount++; externalScriptHosts.push(h); }
+      if (h && h !== currentOnlyDomain && !_hostEndsWith(h, currentOnlyDomain) && !_sameOrgHost(h, currentOnlyDomain) && !_isTrustedHost(h)) { extCount++; externalScriptHosts.push(h); }
     }
   };
   countExternal(Array.from(sTags));
@@ -206,7 +211,7 @@ const collect = () => {
     if (!src) continue;
     imgTotal++;
     const h = _hostOf(src);
-    if (h && h !== onlyDomain && !_hostEndsWith(h, onlyDomain) && !_sameOrgHost(h, onlyDomain) && !_isTrustedHost(h)) imgExt++;
+    if (h && h !== currentOnlyDomain && !_hostEndsWith(h, currentOnlyDomain) && !_sameOrgHost(h, currentOnlyDomain) && !_isTrustedHost(h)) imgExt++;
   }
   let imgPct = imgTotal === 0 ? 0 : (imgExt / imgTotal) * 100;
   result['Request URL'] = (imgPct > 60) ? '1' : (imgPct > 30 ? '0' : '-1');
@@ -224,7 +229,7 @@ const collect = () => {
     if (abs && /^https?:\/\//i.test(abs) && pageLinks.length < 160) pageLinks.push(abs);
     aTotal++;
     const h = _hostOf(href);
-    if (h && h !== onlyDomain && !_hostEndsWith(h, onlyDomain) && !_sameOrgHost(h, onlyDomain) && !_isTrustedHost(h)) { aExt++; externalLinkHosts.add(h); }
+    if (h && h !== currentOnlyDomain && !_hostEndsWith(h, currentOnlyDomain) && !_sameOrgHost(h, currentOnlyDomain) && !_isTrustedHost(h)) { aExt++; externalLinkHosts.add(h); }
     try {
       const text = (a.textContent || '').trim().toLowerCase();
       const m = text.match(/(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)/i);
@@ -273,7 +278,7 @@ const collect = () => {
       const hit = c.match(/url\s*=\s*([^;]+)/i);
       if (hit) {
         const target = new URL(hit[1].trim().replace(/^['"]|['"]$/g, ''), window.location.href);
-        if (target.hostname && target.hostname !== urlDomain && !_hostEndsWith(target.hostname, onlyDomain) && !_sameOrgHost(target.hostname, onlyDomain) && !_isTrustedHost(target.hostname)) dom.metaRefreshRedirect = true;
+        if (target.hostname && target.hostname !== currentDomain && !_hostEndsWith(target.hostname, currentOnlyDomain) && !_sameOrgHost(target.hostname, currentOnlyDomain) && !_isTrustedHost(target.hostname)) dom.metaRefreshRedirect = true;
       }
     }
   } catch (_) {}
@@ -292,21 +297,18 @@ const collect = () => {
     else if (action.startsWith('http')) {
       try {
         const ah = new URL(action).hostname.replace(/^www\./, '');
-        if (ah !== onlyDomain && !_hostEndsWith(ah, onlyDomain) && !_sameOrgHost(ah, onlyDomain) && !_isTrustedHost(ah)) result['SFH'] = '1';
+        if (ah !== currentOnlyDomain && !_hostEndsWith(ah, currentOnlyDomain) && !_sameOrgHost(ah, currentOnlyDomain) && !_isTrustedHost(ah)) result['SFH'] = '1';
       } catch (_) {}
     }
   }
   result['mailto'] = '-1';
   for (const f of forms) { const a = f.getAttribute('action') || ''; if (a.startsWith('mailto')) { result['mailto'] = '0'; break; } }
 
-  // ── IFRAME RISK SCORE (V3) — chấm điểm chi tiết từng iframe ──
-  //   +10 ẩn | +15 cross-origin | +20 không trong whitelist | +20 chứa form
-  //   +30 chứa password field | +30 chứa script obfuscated
-  //   Nếu src từ trusted provider (Google/OpenAI/Stripe...) → 0 điểm (SAFE)
+  // ── IFRAME RISK SCORE (V3) ──
   result['iFrames'] = '-1';
   dom.numIframes = iframes.length;
   dom.hiddenIframe = false;
-  let hiddenIframeCount = 0;
+  let hiddenIframeCountResult = 0;
   let iframeRiskScore = 0;
   const iframeDetails = [];
   const TRUSTED_IFRAME_HOSTS = ['google.com','recaptcha','gstatic.com','google-analytics.com',
@@ -315,7 +317,7 @@ const collect = () => {
     'twimg.com','linkedin.com','bing.com','microsoft.com','paypal.com','amazon.com','apple.com',
     'openai.com','chatgpt.com','youtube.com','googlevideo.com','player.vimeo.com','cloud.mongodb.com','mongodb.com'];
   const _isTrustedIframeHost = (host) => {
-    if (!host) return true; // same-origin hoặc không có src → mặc định an toàn
+    if (!host) return true; 
     const h = host.toLowerCase();
     return TRUSTED_IFRAME_HOSTS.some(t => h.includes(t)) || _isTrustedHost(h);
   };
@@ -327,21 +329,19 @@ const collect = () => {
     const st = fr.style || {};
     const isHidden = st.display === 'none' || st.visibility === 'hidden' ||
       parseFloat(st.opacity || '1') === 0 || (w > 0 && w <= 1) || (h > 0 && h <= 1);
-    const isCrossOrigin = srcHost && srcHost !== onlyDomain && !_hostEndsWith(srcHost, onlyDomain);
+    const isCrossOrigin = srcHost && srcHost !== currentOnlyDomain && !_hostEndsWith(srcHost, currentOnlyDomain);
     const isTrusted = _isTrustedIframeHost(srcHost);
 
-    // Trusted iframe (reCAPTCHA, YouTube, OAuth) → 0 điểm, bỏ qua
     if (isTrusted && !isHidden) continue;
-    if (isTrusted && isHidden) continue; // reCAPTCHA/Pixel ẩn cũng OK
+    if (isTrusted && isHidden) continue; 
 
     let score = 0;
     const reasons = [];
 
-    if (isHidden) { score += 10; reasons.push('ẩn'); hiddenIframeCount++; _stickyState.hiddenIframe = true; }
+    if (isHidden) { score += 10; reasons.push('ẩn'); hiddenIframeCountResult++; _stickyState.hiddenIframe = true; }
     if (isCrossOrigin && !isTrusted) { score += 15; reasons.push('cross-origin'); }
     if (isCrossOrigin && !isTrusted && !_isTrustedHost(srcHost)) { score += 20; reasons.push('domain lạ'); }
 
-    // Kiểm tra nội dung iframe (chỉ same-origin mới truy cập được contentDocument)
     let iframeHasForm = false, iframeHasPassword = false, iframeHasObf = false;
     try {
       const idoc = fr.contentDocument || fr.contentWindow?.document;
@@ -356,7 +356,7 @@ const collect = () => {
           }
         }
       }
-    } catch (_) { /* cross-origin → không truy cập được, bỏ qua */ }
+    } catch (_) { }
 
     if (iframeHasForm) { score += 20; reasons.push('chứa form'); }
     if (iframeHasPassword) { score += 30; reasons.push('chứa ô mật khẩu'); }
@@ -370,11 +370,10 @@ const collect = () => {
   dom.hiddenIframe = _stickyState.hiddenIframe;
   dom.iframeRiskScore = iframeRiskScore;
   dom.iframeDetails = iframeDetails;
-  // Badge: tổng điểm iframe quyết định mức độ
-  if (iframeRiskScore >= 40) result['iFrames'] = '1';       // đỏ
-  else if (iframeRiskScore >= 25) result['iFrames'] = '2';   // cam
-  else if (iframeRiskScore >= 10) result['iFrames'] = '0';   // vàng
-  else result['iFrames'] = '-1';                              // xanh
+  if (iframeRiskScore >= 40) result['iFrames'] = '1';       
+  else if (iframeRiskScore >= 25) result['iFrames'] = '2';   
+  else if (iframeRiskScore >= 10) result['iFrames'] = '0';   
+  else result['iFrames'] = '-1';                              
 
   // ── FORM nhạy cảm + hijacking ──
   const sensitiveNames = ['password','passcode','passwd','otp','pin','cvv','cvc','cardnumber','card-number',
@@ -409,7 +408,7 @@ const collect = () => {
         try {
           const ah = new URL(action).hostname.replace(/^www\./, '');
           const trusted = TRUSTED_FORM_HOSTS.some(h => ah === h || ah.endsWith('.' + h));
-          const same = ah === onlyDomain || _hostEndsWith(ah, onlyDomain) || _sameOrgHost(ah, onlyDomain);
+          const same = ah === currentOnlyDomain || _hostEndsWith(ah, currentOnlyDomain) || _sameOrgHost(ah, currentOnlyDomain);
           if (!trusted && !same && !_isTrustedHost(ah)) hijackFound = true;
         } catch (_) {}
       }
@@ -424,17 +423,12 @@ const collect = () => {
   dom.cardField = cardField;
   dom.bankAccountField = bankAccountField;
   dom.hiddenForm = hiddenFormFound;
-  // Phản chiếu vào result để hiển thị badge
   result['Sensitive Form'] = sensitiveFound ? (cardField || bankAccountField ? '2' : '0') : '-1';
   result['Form Hijacking'] = hijackFound ? '1' : '-1';
   result['Hidden Form'] = hiddenFormFound ? '2' : '-1';
-  // SFH: form không có action là RẤT phổ biến ở SPA (React/Vue/Angular submit bằng JS).
-  //      CHỈ hiện vàng khi form đó YÊU CẦU THÔNG TIN NHẠY CẢM (password/OTP).
-  //      Không có password → bình thường → hiện xanh (-1), không phạt điểm.
   if (result['SFH'] === '0' && !sensitiveFound) {
     result['SFH'] = '-1';
   }
-  // Truyền SFH cho engine
   dom.sfh = result['SFH'];
 
   // ── Obfuscation + keylogger + clipboard ──
@@ -496,7 +490,7 @@ const collect = () => {
   result['Obfuscated Script'] = hasObf ? '1' : (maxConf >= 40 ? '0' : '-1');
   result['JavaScript Risk'] = maxConf >= 60 ? '1' : (maxConf >= 35 ? '2' : '-1');
 
-  // ── suspicious external script (IP / domain lạ) ──
+  // ── suspicious external script ──
   let suspExt = false;
   for (const h of externalScriptHosts) {
     if (ipRe.test(h)) { suspExt = true; break; }
@@ -523,15 +517,11 @@ const collect = () => {
   dom.downloadFile = dom.downloadFile || _stickyState.downloadFile;
   _stickyState.downloadFile = dom.downloadFile;
 
-  // ── network monitor findings (tích lũy từ injected hook + sticky) ──
   if (netState.uploadToExternal) _stickyState.networkUploadToExternal = true;
   dom.networkUploadToExternal = _stickyState.networkUploadToExternal;
-  // FORM DESTINATION ENGINE (V3): theo dõi endpoint thực tế nhận dữ liệu form
-  // không chỉ dựa vào form.action mà theo dõi fetch/XHR/sendBeacon cross-domain POST
   dom.formDestinations = netState.externalPostHosts ? Array.from(netState.externalPostHosts) : [];
   dom.hasUntrustedFormDest = dom.formDestinations.some(h => !_isTrustedHost(h));
 
-  // ═══ SỐ LƯỢNG — đếm cho hiển thị badge ═══
   const linkWarnings = aExt;
   const scriptWarnings = extCount;
   const imageWarnings = imgExt;
@@ -540,7 +530,7 @@ const collect = () => {
   const formDanger = hijackFound ? 1 : 0;
   const formWarning = sensitiveFormCount;
   dom.counts = {
-    hiddenIframes: hiddenIframeCount,
+    hiddenIframes: hiddenIframeCountResult,
     totalIframes: iframes.length,
     iframeRiskScore: iframeRiskScore,
     sensitiveForms: sensitiveFormCount,
@@ -588,8 +578,9 @@ const permState = { requests: new Set() };
 // Lắng nghe CustomEvent từ MAIN-world script
 window.addEventListener('__antiscam_net', (e) => {
   try {
+    const currentOnlyDomain = window.location.hostname.replace(/^www\./, '');
     const d = e.detail || {};
-    if (d.host && d.host !== onlyDomain && !_hostEndsWith(d.host, onlyDomain) && !_isTrustedHost(d.host)) {
+    if (d.host && d.host !== currentOnlyDomain && !_hostEndsWith(d.host, currentOnlyDomain) && !_isTrustedHost(d.host)) {
       netState.externalHosts.add(d.host);
       if (d.upload) {
         netState.uploadToExternal = true;
@@ -617,3 +608,50 @@ const injectNetworkHook = () => {
     s.onload = () => { try { s.remove(); } catch (_) {} };
   } catch (_) { /* Fallback: nếu vẫn lỗi CSP, network monitoring sẽ bị bỏ qua */ }
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXECUTION & REAL-TIME MONITORING (Vấn đề 8, 9, 13)
+// ═══════════════════════════════════════════════════════════════════════════
+let _rescanTimer = null;
+const scheduleRescan = (ms = 1000) => {
+  if (_rescanTimer) clearTimeout(_rescanTimer);
+  _rescanTimer = setTimeout(() => {
+    const { result, dom } = collect();
+    chrome.runtime.sendMessage({ type: 'ANALYSIS_UPDATE', result, dom }).catch(() => {});
+  }, ms);
+};
+
+// MutationObserver: theo dõi DOM thay đổi (form mới, script mới, iframe mới)
+const observer = new MutationObserver((mutations) => {
+  let heavy = false;
+  for (const m of mutations) {
+    if (m.addedNodes.length > 0) {
+      for (const node of m.addedNodes) {
+        if (node.nodeType === 1 && ['FORM', 'SCRIPT', 'IFRAME', 'A', 'INPUT'].includes(node.nodeName)) {
+          heavy = true; break;
+        }
+      }
+    }
+    if (heavy) break;
+  }
+  if (heavy) scheduleRescan(800);
+});
+observer.observe(document.documentElement, { childList: true, subtree: true });
+
+// Initial Execution
+const initScan = () => {
+  const { result, dom } = collect();
+  chrome.runtime.sendMessage({ type: 'ANALYSIS_RESULT', result, dom }).catch(() => {});
+  injectPageHooksResource();
+  injectNetworkHook();
+};
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initScan);
+} else {
+  initScan();
+}
+
+// URL change detection (SPA)
+window.addEventListener('popstate', () => scheduleRescan(500));
+window.addEventListener('hashchange', () => scheduleRescan(500));

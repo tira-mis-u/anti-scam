@@ -133,11 +133,14 @@ const _countData = (key, counts) => {
   switch (key) {
     case 'iFrames':
       if (counts.hiddenIframes > 0) return { text: counts.hiddenIframes > 1 ? '×' + counts.hiddenIframes : '1' };
-      break;
+      if (counts.iframes && counts.iframes.total > 0) return { text: counts.iframes.total };
+      return null;
     case 'Anchor':
     case 'Script & Link':
     case 'Request URL':
+      return null;
     case 'Sensitive Form':
+      if (counts.sensitiveForms > 0) return { text: '×' + counts.sensitiveForms };
       return null;
     case 'SuspiciousLinks':
       if (counts.suspiciousLinks > 0) return { text: '×' + counts.suspiciousLinks };
@@ -148,6 +151,9 @@ const _countData = (key, counts) => {
     case 'PermissionAbuse':
       if (counts.permissionRequests > 0) return { text: '×' + counts.permissionRequests };
       break;
+    case 'HTTPS':
+    case 'SSL':
+      return null;
   }
   return null;
 };
@@ -204,9 +210,9 @@ const _labelForSignal = (key, val, fallbackText) => {
     case 'NewDomain': case 'Domain Age': return 'Website mới đăng ký';
     case 'TrustedResources': return 'CDN uy tín';
     case 'Favicon': return safe ? 'Favicon hợp lệ' : 'Favicon bất thường';
-    case 'Anchor': return 'Tổng liên kết đã kiểm tra';
-    case 'Request URL': return 'Tổng ảnh/tài nguyên ảnh';
-    case 'Script & Link': return 'Tổng script/link nhúng';
+    case 'Anchor': return 'Tổng liên kết';
+    case 'Request URL': return 'Tổng tài nguyên';
+    case 'Script & Link': return 'Tổng mã nhúng';
     case 'Sensitive Form': return safe ? 'Không phát hiện form đánh cắp' : 'Yêu cầu thông tin nhạy cảm';
     case 'NoPhishingForm': return 'Không phát hiện form đánh cắp';
     case 'Form Hijacking': case 'FormDest': return 'Form gửi sang domain lạ';
@@ -390,11 +396,19 @@ const renderState = (state, domain) => {
   $('#site_score').text(isValidPct ? `${pct}%` : '...');
 
   if (isValidPct) {
-    const accuracyLine = `<div class="sub-note accuracy-note">Độ tin cậy: ${isValidConfidence ? confidencePct : 0}%</div>`;
-    const unknownLine = isUnknown
-      ? `<div class="sub-note">Chưa đủ dữ liệu — không nhập thông tin nhạy cảm nếu chưa chắc chắn.</div>`
-      : '';
-    $('#site_msg').html(message + accuracyLine + unknownLine);
+    const accuracyLine = document.createElement('div');
+    accuracyLine.className = 'sub-note accuracy-note';
+    accuracyLine.textContent = `Độ tin cậy: ${isValidConfidence ? confidencePct : 0}%`;
+    
+    $('#site_msg').text(message);
+    $('#site_msg').append(accuracyLine);
+    
+    if (isUnknown) {
+      const unknownLine = document.createElement('div');
+      unknownLine.className = 'sub-note';
+      unknownLine.textContent = 'Chưa đủ dữ liệu — không nhập thông tin nhạy cảm nếu chưa chắc chắn.';
+      $('#site_msg').append(unknownLine);
+    }
   } else {
     $('#site_msg').text('...');
   }
@@ -567,6 +581,12 @@ const validateReportForm = () => {
   try { parsedUrl = new URL(currentTabUrl); } catch (_) {}
   if (!parsedUrl || !['http:', 'https:'].includes(parsedUrl.protocol)) return 'URL không hợp lệ.';
   if (!reportCategory || !reportCategory.value) return 'Vui lòng chọn loại báo cáo.';
+  
+  if (reportCategory.value === 'other') {
+    const otherVal = (document.getElementById('reportCategoryOther')?.value || '').trim();
+    if (otherVal.length < 3) return 'Vui lòng nhập lý do cụ thể (tối thiểu 3 ký tự).';
+  }
+
   const description = (reportDescription && reportDescription.value || '').trim();
   if (description.length < 20) return 'Mô tả phải có tối thiểu 20 ký tự.';
   if (description.length > 1000) return 'Mô tả không được vượt quá 1000 ký tự.';
@@ -601,7 +621,14 @@ const buildReportFormData = async () => {
   formData.append('browserLanguage', navigator.language || '');
   formData.append('userAgent', navigator.userAgent || '');
   formData.append('deviceId', await getReportDeviceId());
-  formData.append('category', reportCategory.value);
+  
+  let category = reportCategory.value;
+  if (category === 'other') {
+    const otherVal = (document.getElementById('reportCategoryOther')?.value || '').trim();
+    category = `other: ${otherVal}`;
+  }
+  formData.append('category', category);
+  
   formData.append('description', (reportDescription.value || '').trim());
 
   // ═══ GPS thật — chính xác 100%
@@ -630,6 +657,45 @@ if (reportToggle && reportForm) {
     requestGpsPermission();
   });
 }
+
+// Logic chuyển đổi optgroup dựa trên radio button
+document.querySelectorAll('input[name="reportType"]').forEach(radio => {
+  radio.addEventListener('change', (e) => {
+    const isMalicious = e.target.value === 'malicious';
+    const malGroup = document.getElementById('maliciousCategories');
+    const safeGroup = document.getElementById('safeCategories');
+    const categorySelect = document.getElementById('reportCategory');
+    
+    if (malGroup && safeGroup && categorySelect) {
+      malGroup.hidden = !isMalicious;
+      safeGroup.hidden = isMalicious;
+      categorySelect.value = ''; // Reset selection
+      document.getElementById('otherCategoryWrap').hidden = true; // Hide "Other" wrap on type change
+      
+      // Update placeholder and hint
+      const descArea = document.getElementById('reportDescription');
+      const hintDiv = document.getElementById('reportHint');
+      if (isMalicious) {
+        descArea.placeholder = "Lý do bạn báo cáo website này độc hại...";
+        hintDiv.textContent = "Ví dụ: Website giả mạo ngân hàng, yêu cầu nhập OTP, mạo danh Shopee.";
+      } else {
+        descArea.placeholder = "Lý do bạn cho rằng website này an toàn...";
+        hintDiv.textContent = "Ví dụ: Đây là website chính thức của một tổ chức giáo dục hoặc doanh nghiệp uy tín.";
+      }
+    }
+  });
+});
+
+// Show/Hide "Other" input field
+document.getElementById('reportCategory').addEventListener('change', (e) => {
+  const otherWrap = document.getElementById('otherCategoryWrap');
+  if (otherWrap) {
+    otherWrap.hidden = e.target.value !== 'other';
+    if (e.target.value === 'other') {
+      document.getElementById('reportCategoryOther').focus();
+    }
+  }
+});
 
 // ═══════════════════════════════════════════════════════
 // YÊU CẦU QUYỀN GPS — gọi ngay khi mở form báo cáo
