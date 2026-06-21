@@ -304,16 +304,7 @@ const isAdminIpAllowed = (req) => {
 
 const isPrivateIp = (ip) => /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|::1|localhost)/.test(String(ip || ''));
 
-const lookupGeoIp = async (ip) => {
-    try {
-        if (!ip || isPrivateIp(ip)) return { country: '', region: '', city: '' };
-        const resp = await axios.get(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,regionName,city`, { timeout: 2500 });
-        if (!resp.data || resp.data.status !== 'success') return { country: '', region: '', city: '' };
-        return { country: resp.data.country || '', region: resp.data.regionName || '', city: resp.data.city || '' };
-    } catch (_) {
-        return { country: '', region: '', city: '' };
-    }
-};
+// Location đã bị loại bỏ để bảo vệ riêng tư. Chỉ giữ IP, Browser, Device.
 
 const buildDeviceFingerprint = (req, ip) => {
     const raw = [
@@ -563,11 +554,42 @@ const buildListPayload = (body, type, actorSource = 'manual-admin') => {
     };
 };
 
+
+// ═══════════════════════════════════════════════════════════
+// OFFICIAL BRAND DOMAINS — TUYỆT ĐỐI KHÔNG CHO BLOCK
+// Ngăn false positive khi admin nhầm hoặc user report sai
+// ═══════════════════════════════════════════════════════════
+const OFFICIAL_BRAND_DOMAINS = new Set([
+    // Tech giants
+    'google.com','youtube.com','microsoft.com','apple.com','amazon.com','facebook.com',
+    'openai.com','chatgpt.com','github.com','gitlab.com','stackoverflow.com',
+    'mongodb.com','cloud.mongodb.com','atlas.mongodb.com','cloud-ml.mongodb.com',
+    'cloudflare.com','aws.amazon.com','azure.com','digitalocean.com',
+    // Vietnam
+    'vietcombank.com.vn','bidv.com.vn','mbbank.com.vn','techcombank.com.vn',
+    'tpb.vn','tpbank.vn','agribank.com.vn','vietinbank.vn','vpbank.vn',
+    'sacombank.com','momo.vn','zalopay.vn','zalo.me','shopee.vn','lazada.vn',
+    'tiki.vn','vnpay.vn','fpt.com.vn','fpt.vn','viettel.com.vn','viettel.vn',
+    // More
+    'netflix.com','paypal.com','stripe.com','linkedin.com','twitter.com','x.com',
+    'instagram.com','whatsapp.com','telegram.org','wikipedia.org','mozilla.org',
+]);
+const isOfficialBrandDomain = (domain) => {
+    const d = String(domain || '').toLowerCase().replace(/^www\./, '');
+    return OFFICIAL_BRAND_DOMAINS.has(d) || OFFICIAL_BRAND_DOMAINS.has(d.replace(/\/$/, ''));
+};
+
+
 const approveReportDocument = async (req, report, decision, reviewNote = '') => {
     const now = new Date();
     const listUrl = String(report.url || report.domain || '').trim();
     const listDomain = normalizeHostname(report.domain || listUrl);
     if (!listDomain) throw new Error('INVALID_REPORT_DOMAIN');
+
+    // ═══ BẢO VỆ: Không cho thêm official brand domain vào blacklist/pornlist
+    if (['blacklist', 'pornlist'].includes(decision) && isOfficialBrandDomain(listDomain)) {
+        throw new Error('OFFICIAL_BRAND_PROTECTED: Không thể đưa domain chính thức vào danh sách cấm.');
+    }
 
     const listResult = await db.collection(decision).updateOne(
         { domain: listDomain },
@@ -806,7 +828,6 @@ app.post('/api/report', reportLimiter, function(req, res, next) {
         if (!db) return res.status(status.SERVICE_UNAVAILABLE).send({ message: 'Không thể gửi báo cáo. Vui lòng thử lại.' });
 
         const ip = getClientIp(req);
-        const geo = await lookupGeoIp(ip);
         const deviceFingerprint = buildDeviceFingerprint(req, ip);
         const now = new Date();
         const screenshotUrl = await saveReportScreenshot(req.file);
@@ -818,15 +839,13 @@ app.post('/api/report', reportLimiter, function(req, res, next) {
             description: validated.description,
             screenshotUrl,
             status: 'pending',
-            ip,
-            country: geo.country,
-            region: geo.region,
-            city: geo.city,
+            ip, // Lưu IP thực của người báo cáo
+            // Bỏ location để bảo vệ riêng tư
+            browserName: String(req.body.browserName || '').slice(0, 80),
+            userAgent: String(req.body.userAgent || req.headers['user-agent'] || '').slice(0, 500),
             deviceFingerprint,
             extensionVersion: String(req.body.extensionVersion || '').slice(0, 50),
-            browserName: String(req.body.browserName || '').slice(0, 80),
             browserLanguage: String(req.body.browserLanguage || '').slice(0, 40),
-            userAgent: String(req.body.userAgent || req.headers['user-agent'] || '').slice(0, 500),
             pageTitle: String(req.body.pageTitle || '').slice(0, 300),
             clientTimestamp: req.body.timestamp ? new Date(req.body.timestamp) : null,
             createdAt: now,
@@ -1077,9 +1096,7 @@ app.post('/api/admin/reports', requireAdmin, requireAdminCsrf, requireRole('admi
             createdById: req.adminRaw._id,
             adminIp: getClientIp(req),
             ip: '',
-            country: '',
-            region: '',
-            city: '',
+            // No location stored — privacy first
             deviceFingerprint: crypto.createHash('sha256').update(`manual-admin|${req.adminRaw._id}|${validated.url}|${Date.now()}|${crypto.randomBytes(8).toString('hex')}`).digest('hex'),
             extensionVersion: 'admin-panel',
             browserName: 'admin-panel',

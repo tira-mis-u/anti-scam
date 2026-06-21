@@ -525,6 +525,43 @@ const getBrowserName = () => {
   return 'Không xác định';
 };
 
+
+// ═══════════════════════════════════════════════════════
+// LẤY VỊ TRÍ GPS THỰC TẾ (chính xác 100% — thay thế IP-based)
+// ═══════════════════════════════════════════════════════
+let _cachedGpsLocation = null;
+let _gpsLocationError = null;
+
+const getLocationFromGPS = () => {
+  return new Promise((resolve) => {
+    if (_cachedGpsLocation) {
+      resolve(_cachedGpsLocation);
+      return;
+    }
+    if (!navigator.geolocation) {
+      _gpsLocationError = 'Trình duyệt không hỗ trợ Geolocation';
+      resolve(null);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        _cachedGpsLocation = {
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+          source: 'gps'
+        };
+        resolve(_cachedGpsLocation);
+      },
+      (err) => {
+        _gpsLocationError = err.message;
+        resolve(null);
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 300000 }
+    );
+  });
+};
+
 const validateReportForm = () => {
   let parsedUrl = null;
   try { parsedUrl = new URL(currentTabUrl); } catch (_) {}
@@ -566,6 +603,18 @@ const buildReportFormData = async () => {
   formData.append('deviceId', await getReportDeviceId());
   formData.append('category', reportCategory.value);
   formData.append('description', (reportDescription.value || '').trim());
+
+  // ═══ GPS thật — chính xác 100%
+  const gpsLoc = await getLocationFromGPS();
+  if (gpsLoc) {
+    formData.append('latitude', String(gpsLoc.latitude));
+    formData.append('longitude', String(gpsLoc.longitude));
+    formData.append('gpsAccuracy', String(gpsLoc.accuracy));
+    formData.append('locationSource', 'gps');
+  } else {
+    formData.append('locationSource', 'ip-fallback');
+  }
+
   if (selectedReportFile) formData.append('screenshot', selectedReportFile, selectedReportFile.name);
   return formData;
 };
@@ -577,8 +626,26 @@ if (reportToggle && reportForm) {
     reportToggle.setAttribute('aria-expanded', String(!reportForm.hidden));
     updateReportTargetInfo();
     setReportStatus('');
+    // Khi mở form báo cáo → yêu cầu quyền GPS ngay
+    requestGpsPermission();
   });
 }
+
+// ═══════════════════════════════════════════════════════
+// YÊU CẦU QUYỀN GPS — gọi ngay khi mở form báo cáo
+// ═══════════════════════════════════════════════════════
+let _gpsPermissionRequested = false;
+const requestGpsPermission = () => {
+  if (_gpsPermissionRequested) return;
+  _gpsPermissionRequested = true;
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      () => {},  // success — location sẽ được lấy khi gửi báo cáo
+      () => {},  // error — fallback sang IP-based
+      { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+    );
+  }
+};
 
 if (reportDescription && reportDescriptionCount) {
   reportDescription.addEventListener('input', () => {

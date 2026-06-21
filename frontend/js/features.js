@@ -23,7 +23,7 @@ const _TRUSTED = ['googleapis.com','google.com','gstatic.com','google-analytics.
   'jsdelivr.net','unpkg.com','bootstrapcdn.com','maxcdn.bootstrapcdn.com','netdna.bootstrapcdn.com',
   'stackpath.bootstrapcdn.com','fontawesome.com','use.fontawesome.com','kit.fontawesome.com',
   'ajax.aspnetcdn.com','msecnd.net','code.jquery.com','facebook.net','fbcdn.net','twitter.com','twimg.com',
-  'cloudfront.net','akamai.net','akamaized.net','fastly.net','stripe.com','js.stripe.com',
+  'cloudfront.net','akamai.net','akamaized.net','fastly.net','stripe.com','js.stripe.com','mongodb.com','cloud.mongodb.com',
   'tailwindcss.com','polyfill.io','githubassets.com','googlevideo.com'];
 const _ORG_ECOSYSTEMS = [
   ['github.com','githubusercontent.com','githubassets.com','github.io'],
@@ -313,7 +313,7 @@ const collect = () => {
     'googletagmanager.com','doubleclick.net','facebook.com','fbcdn.net','connect.facebook.net',
     'stripe.com','js.stripe.com','cloudflare.com','challenges.cloudflare.com','twitter.com',
     'twimg.com','linkedin.com','bing.com','microsoft.com','paypal.com','amazon.com','apple.com',
-    'openai.com','chatgpt.com','youtube.com','googlevideo.com','player.vimeo.com'];
+    'openai.com','chatgpt.com','youtube.com','googlevideo.com','player.vimeo.com','cloud.mongodb.com','mongodb.com'];
   const _isTrustedIframeHost = (host) => {
     if (!host) return true; // same-origin hoặc không có src → mặc định an toàn
     const h = host.toLowerCase();
@@ -602,235 +602,18 @@ window.addEventListener('__antiscam_perm', (e) => {
   try { if (e.detail && e.detail.name) { permState.requests.add(String(e.detail.name)); scheduleRescan(250); } } catch (_) {}
 });
 
+
 const injectNetworkHook = () => {
+  // V3: Thay vì inject inline script (bị CSP chặn), dùng external script file
+  // Giải thích: Chrome Extension MV3 có CSP nghiêm ngặt, không cho phép
+  // script.textContent = code (inline script). Phải dùng s.src với file external.
   try {
     if (document.getElementById('__antiscam_net_hook')) return;
-    const code = `(function(){
-      if (window.__antiscamHooked) return; window.__antiscamHooked = true;
-      var host = location.hostname.replace(/^www\\./,'');
-      var send = function(host2, upload){
-        try { window.dispatchEvent(new CustomEvent('__antiscam_net',{detail:{host:host2,upload:upload}})); } catch(e){}
-      };
-      // fetch
-      var _fetch = window.fetch;
-      if (_fetch) window.fetch = function(input, opts){
-        try {
-          var u = typeof input === 'string' ? input : (input && input.url);
-          if (u) {
-            var h = new URL(u, location.href).hostname.replace(/^www\\./,'');
-            if (h && h !== host) {
-              var up = opts && opts.method && /post|put|patch/i.test(opts.method);
-              if (opts && opts.body) up = true;
-              send(h, !!up);
-            }
-          }
-        } catch(e){}
-        return _fetch.apply(this, arguments);
-      };
-      // XMLHttpRequest
-      var _open = XMLHttpRequest.prototype.open;
-      var _send = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.open = function(m, u){
-        this.__ascm_m = m; this.__ascm_url = u;
-        return _open.apply(this, arguments);
-      };
-      XMLHttpRequest.prototype.send = function(body){
-        try {
-          if (this.__ascm_url) {
-            var h = new URL(this.__ascm_url, location.href).hostname.replace(/^www\\./,'');
-            if (h && h !== host) send(h, !!body || /post|put|patch/i.test(this.__ascm_m || ''));
-          }
-        } catch(e){}
-        return _send.apply(this, arguments);
-      };
-      // sendBeacon
-      if (navigator.sendBeacon) {
-        var _beacon = navigator.sendBeacon.bind(navigator);
-        navigator.sendBeacon = function(url){
-          try {
-            var h = new URL(url, location.href).hostname.replace(/^www\\./,'');
-            if (h && h !== host) send(h, true);
-          } catch(e){}
-          return _beacon.apply(navigator, arguments);
-        };
-      }
-      // Permission/API abuse hooks
-      var sendPerm = function(name){ try { window.dispatchEvent(new CustomEvent('__antiscam_perm',{detail:{name:name}})); } catch(e){} };
-      try {
-        if (navigator.permissions && navigator.permissions.query) {
-          var _pq = navigator.permissions.query.bind(navigator.permissions);
-          navigator.permissions.query = function(desc){
-            try { if (desc && desc.name) sendPerm('permissions-' + desc.name); } catch(e){}
-            return _pq.apply(navigator.permissions, arguments);
-          };
-        }
-      } catch(e){}
-      try {
-        if (window.Notification && Notification.requestPermission) {
-          var _np = Notification.requestPermission.bind(Notification);
-          Notification.requestPermission = function(){ sendPerm('notification'); return _np.apply(Notification, arguments); };
-        }
-      } catch(e){}
-      try {
-        if (navigator.geolocation) {
-          ['getCurrentPosition','watchPosition'].forEach(function(k){
-            var orig = navigator.geolocation[k];
-            if (orig) navigator.geolocation[k] = function(){ sendPerm('geolocation'); return orig.apply(navigator.geolocation, arguments); };
-          });
-        }
-      } catch(e){}
-      try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          var _gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-          navigator.mediaDevices.getUserMedia = function(constraints){
-            var c = constraints || {}; sendPerm(c.video && c.audio ? 'camera-microphone' : (c.video ? 'camera' : (c.audio ? 'microphone' : 'media')));
-            return _gum.apply(navigator.mediaDevices, arguments);
-          };
-        }
-      } catch(e){}
-      try {
-        var _fs = Element && Element.prototype && Element.prototype.requestFullscreen;
-        if (_fs) Element.prototype.requestFullscreen = function(){ sendPerm('fullscreen'); return _fs.apply(this, arguments); };
-      } catch(e){}
-      try {
-        if (window.PaymentRequest) {
-          var OrigPR = window.PaymentRequest;
-          window.PaymentRequest = function(){ sendPerm('payment-request'); return Reflect.construct(OrigPR, arguments); };
-          window.PaymentRequest.prototype = OrigPR.prototype;
-        }
-      } catch(e){}
-      try {
-        if (navigator.requestMIDIAccess) {
-          var _midi = navigator.requestMIDIAccess.bind(navigator);
-          navigator.requestMIDIAccess = function(){ sendPerm('midi'); return _midi.apply(navigator, arguments); };
-        }
-      } catch(e){}
-      try {
-        ['DeviceMotionEvent','DeviceOrientationEvent'].forEach(function(n){
-          var C = window[n];
-          if (C && C.requestPermission) {
-            var orig = C.requestPermission.bind(C);
-            C.requestPermission = function(){ sendPerm('sensors'); return orig.apply(C, arguments); };
-          }
-        });
-      } catch(e){}
-      // WebSocket
-      var _WS = window.WebSocket;
-      if (_WS) {
-        var OrigWS = _WS;
-        window.WebSocket = function(url, protocols){
-          try {
-            var h = new URL(url, location.href).hostname.replace(/^www\\./,'');
-            if (h && h !== host) send(h, false);
-          } catch(e){}
-          return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
-        };
-        window.WebSocket.prototype = OrigWS.prototype;
-        if (OrigWS.CONNECTING != null) window.WebSocket.CONNECTING = OrigWS.CONNECTING;
-        if (OrigWS.OPEN != null) window.WebSocket.OPEN = OrigWS.OPEN;
-        if (OrigWS.CLOSING != null) window.WebSocket.CLOSING = OrigWS.CLOSING;
-        if (OrigWS.CLOSED != null) window.WebSocket.CLOSED = OrigWS.CLOSED;
-      }
-    })();`;
     const s = document.createElement('script');
     s.id = '__antiscam_net_hook';
-    s.textContent = code;
-    (document.head || document.documentElement).appendChild(s);
-    s.remove();
-  } catch (_) { /* CSP chặn inline → bỏ qua gracefully */ }
+    s.src = chrome.runtime.getURL('js/network_hooks.js');
+    s.async = false;
+    (document.documentElement || document.head || document).appendChild(s);
+    s.onload = () => { try { s.remove(); } catch (_) {} };
+  } catch (_) { /* Fallback: nếu vẫn lỗi CSP, network monitoring sẽ bị bỏ qua */ }
 };
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CONTINUOUS SCAN — gửi phân tích + cập nhật realtime
-// ═══════════════════════════════════════════════════════════════════════════
-let lastSnapshot = '';
-let debounceTimer = null;
-let currentUrl = window.location.href;
-let sentInitial = false;
-
-// Sticky state — tín hiệu phát hiện rồi thì KHÔNG quay lại false (chống nhảy điểm)
-const _stickyState = {
-  contentRich: false,
-  hiddenIframe: false,
-  keylogger: false,
-  clipboardHijack: false,
-  obfuscatedScript: false,
-  suspiciousExternalScript: false,
-  downloadFile: false,
-  permissionAbuse: false,
-  networkUploadToExternal: false,
-  sensitiveForm: false,
-  formHijack: false,
-  hiddenForm: false,
-};
-
-const snapshotKey = (data) => JSON.stringify(data.dom) + '|' + data.result['Obfuscated Script'] + '|' + data.result['SFH'];
-
-const sendAnalysis = (isUpdate) => {
-  const data = collect();
-  const key = snapshotKey(data);
-  if (!isUpdate && sentInitial) return;
-  if (isUpdate && key === lastSnapshot) return; // không đổi → bỏ qua
-  lastSnapshot = key;
-
-  const msg = { type: isUpdate ? 'ANALYSIS_UPDATE' : 'ANALYSIS_RESULT', result: data.result, dom: data.dom };
-  chrome.runtime.sendMessage(msg, () => {
-    if (chrome.runtime.lastError) { /* SW restart — bỏ qua */ }
-  });
-  if (!isUpdate) sentInitial = true;
-};
-
-const scheduleRescan = (delay = 1200) => {
-  if (debounceTimer) clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => sendAnalysis(true), delay);
-};
-
-// ── 1. MutationObserver ──
-const startMutationObserver = () => {
-  if (!('MutationObserver' in window) || !document.body) return;
-  const obs = new MutationObserver((mutations) => {
-    let relevant = false;
-    for (const m of mutations) {
-      for (const node of m.addedNodes) {
-        if (node.nodeType !== 1) continue;
-        const tag = node.tagName;
-        if (tag === 'IFRAME' || tag === 'FORM' || tag === 'SCRIPT' || tag === 'A') { relevant = true; break; }
-        if (tag === 'DIV' || tag === 'SECTION') {
-          if (node.querySelector && node.querySelector('iframe,form,script,input')) { relevant = true; break; }
-        }
-      }
-      if (relevant) break;
-    }
-    if (relevant) scheduleRescan();
-  });
-  try { obs.observe(document.documentElement, { childList: true, subtree: true }); } catch (_) {}
-};
-
-// ── 2. URL change detection ──
-const startUrlWatcher = () => {
-  window.addEventListener('popstate', () => { currentUrl = window.location.href; scheduleRescan(300); });
-  window.addEventListener('hashchange', () => scheduleRescan(300));
-  // Polling cho pushState/replaceState (SPA)
-  setInterval(() => {
-    if (window.location.href !== currentUrl) {
-      currentUrl = window.location.href;
-      // URL đổi → reset toàn bộ sticky + gửi lại ANALYSIS_RESULT (fresh)
-      sentInitial = false; lastSnapshot = '';
-      netState.externalHosts.clear(); netState.uploadToExternal = false; netState.externalPostHosts.clear(); permState.requests.clear();
-      Object.keys(_stickyState).forEach(k => { _stickyState[k] = false; });
-      setTimeout(() => sendAnalysis(false), 400);
-    }
-  }, 2000);
-};
-
-// ═══════════════════════════════════════════════════════════════════════════
-// INIT
-// ═══════════════════════════════════════════════════════════════════════════
-injectPageHooksResource();
-injectNetworkHook();
-sendAnalysis(false);              // phân tích ban đầu
-startMutationObserver();
-startUrlWatcher();
-// quét lại sau 2.5s để bắt nội dung load động (SPA/async)
-setTimeout(() => sendAnalysis(true), 2500);
-setTimeout(() => sendAnalysis(true), 6000);

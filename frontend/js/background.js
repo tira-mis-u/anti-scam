@@ -355,7 +355,7 @@ const classify = async (tabId, featuresResult, urlString, domInput = {}, isUpdat
     for (const w of whiteListingSet) { if (w.includes(domain) || w.includes(registrable)) { inCldWhitelist = true; break; } }
     if (inCldWhitelist) {
       await setTabState(tabId, { status: ANALYSIS_STATUS.SUCCESS, isWhiteList: domain, isPhish: false,
-        legitimatePercent: 100, confidence: 95, result: {}, summary: 'Trang nằm trong danh sách tin cậy.', url: urlString });
+        legitimatePercent: 100, confidence: 95, listType: 'whitelist', result: {}, summary: 'Trang nằm trong danh sách tin cậy.', url: urlString });
       updateBadge(false, 100, tabId); return;
     }
 
@@ -489,7 +489,10 @@ const classify = async (tabId, featuresResult, urlString, domInput = {}, isUpdat
 // Blocking & SafeCheck
 // ─────────────────────────────────────────────────────────────────────────────
 const blockingFunction = (url, blackSite, tabId, opts = {}) => {
+  // Xác định loại cảnh báo: blacklist / pornlist / riskblock / whitelist
+  const listType = opts.listType || (opts.summary ? 'riskblock' : 'blacklist');
   const message = { site: url, match: blackSite, title: url, lenient: inputBlockLenient, riskBlock: !!opts.summary,
+    listType,
     reason: opts.summary || '', favicon: `https://www.google.com/s2/favicons?domain=${url}` };
   setTabState(tabId, { status: ANALYSIS_STATUS.SUCCESS, isBlocked: url, isPhish: true,
     legitimatePercent: 0, confidence: 95, result: {}, summary: opts.summary || 'Trang này nằm trong danh sách đen đã xác nhận.', url }).catch(()=>{});

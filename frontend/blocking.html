@@ -1,48 +1,94 @@
 <!DOCTYPE html>
-  <html>
-    <head>
-    <meta charset="utf-8">
-    <title>AntiScam</title>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AntiScam — Cảnh báo</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Asap:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
-    <link href="blocking.css" type="text/css" rel="stylesheet"></link>
-  
-    </head>
-    <body>
-      
-      <div class="center" style="display:none;">
-        <div class="header">
-          <h1>
-            <img src="assets/antiScamLogo.png" class="logo" alt="AntiScam">
-            An toàn trong tầm tay - AntiScam
-          </h1>
-        </div>
-
-        <img class="warning-icon" src="assets/warning-icon.png" alt="AntiScam warning">
-        
-        <h1 id="header">Trang <span class="sitetitle">site.com</span> đã bị khóa theo đánh giá cộng đồng </h1>
-        <p>
-          Những lý do sau đây dẫn đến trang này bị khóa do báo cáo của cộng đồng:
-        </p>
-        
-        <ol>
-          <li>Trang giả mạo, lừa đảo lấy tiền, thông tin người khác</li>
-          <li>Trang có nội dung độc hại (có chứa mã độc, hình ảnh đồi trụy, nội dung xấu ảnh hưởng tới trẻ nhỏ về tâm lý,...)</li>
-          <li>Trang giả mạo, bôi nhọ danh dự người khác</li>
-          <li>Trang phản động, chống phá chính quyền</li>
-        </ol>
-
-        <p>
-          Cách bảo vệ bạn trên không gian mạng <a href="#">tại đây</a>
-        </p>
-
-        <button class="app-btn success" id="close">Đóng</button>
-        
-        <p class="footer">
-          <button class="app-btn danger" id="allow">Tôi muốn xem <span class="sitematch">site.com</span></button>
-        </p>
-      </div>
-    <script src="/js/blocking.js"></script>
-    </body>
-  </html>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link href="blocking.css" type="text/css" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',ui-sans-serif,system-ui,sans-serif;background:#0a0a0f;color:#e5e7eb;min-height:100vh;overflow-x:hidden}
+    body::before{content:'';position:fixed;inset:0;z-index:0;background:radial-gradient(ellipse 80% 50% at 50% -5%,rgba(239,68,68,.1),transparent),radial-gradient(ellipse 50% 30% at 80% 100%,rgba(239,68,68,.04),transparent);pointer-events:none}
+    .block-wrap{position:relative;z-index:1;max-width:600px;margin:0 auto;padding:48px 24px 60px;display:flex;flex-direction:column;align-items:center;text-align:center}
+    .block-logo{display:flex;align-items:center;gap:10px;margin-bottom:36px}
+    .block-logo img{width:40px;height:40px}
+    .block-logo span{font-size:20px;font-weight:800;background:linear-gradient(135deg,#ef4444,#f97316);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .shield-wrap{width:96px;height:96px;background:linear-gradient(135deg,rgba(239,68,68,.12),rgba(239,68,68,.03));border:2px solid rgba(239,68,68,.25);border-radius:50%;display:grid;place-items:center;margin-bottom:24px;animation:shieldPulse 3s ease infinite}
+    .shield-wrap svg{width:44px;height:44px}
+    @keyframes shieldPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.18)}50%{box-shadow:0 0 0 14px rgba(239,68,68,0)}}
+    .block-domain{font-size:13px;font-weight:500;color:#9ca3af;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:8px 16px;margin-bottom:14px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .block-headline{font-size:22px;font-weight:800;line-height:1.35;margin-bottom:10px;color:#f87171}
+    /* ═══ BADGE TÍN HIỆU — VIỆT HOÁ NGẮN (KHÔNG VÀNG) ═══ */
+    .badge-row{display:inline-flex;align-items:center;gap:8px;padding:9px 20px;border-radius:10px;font-weight:700;font-size:14px;margin:14px auto 4px}
+    .badge-row .b-icon{font-size:17px;flex-shrink:0}
+    .badge-row.badge-den{background:linear-gradient(135deg,rgba(239,68,68,.16),rgba(185,28,28,.1));border:1.5px solid rgba(239,68,68,.4);color:#fca5a5}
+    .badge-row.badge-cam{background:linear-gradient(135deg,rgba(249,115,22,.16),rgba(194,65,12,.1));border:1.5px solid rgba(249,115,22,.4);color:#fdba74}
+    .badge-row.badge-xanh{background:linear-gradient(135deg,rgba(34,197,94,.14),rgba(22,163,74,.09));border:1.5px solid rgba(34,197,94,.35);color:#86efac}
+    .block-reason-text{color:#9ca3af;font-size:13px;line-height:1.65;max-width:500px;margin:10px auto 0}
+    .block-reasons{text-align:left;margin:22px auto;padding:18px 22px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.05);border-radius:12px;max-width:500px;width:100%}
+    .block-reasons li{font-size:13px;color:#b0b8c4;line-height:1.65;margin-bottom:5px;list-style-position:inside}
+    .btn-row{display:flex;gap:12px;margin-top:28px;flex-wrap:wrap;justify-content:center}
+    .btn{padding:11px 26px;border-radius:10px;font-weight:700;font-size:14px;cursor:pointer;border:none;transition:all .2s;display:inline-flex;align-items:center;gap:8px}
+    .btn-close{background:linear-gradient(135deg,#374151,#1f2937);color:#e5e7eb;border:1px solid rgba(255,255,255,.08)}
+    .btn-close:hover{background:linear-gradient(135deg,#4b5563,#374151);transform:translateY(-1px)}
+    .btn-allow{background:linear-gradient(135deg,rgba(239,68,68,.18),rgba(185,28,28,.12));color:#fca5a5;border:1.5px solid rgba(239,68,68,.3)}
+    .btn-allow:hover{background:linear-gradient(135deg,rgba(239,68,68,.28),rgba(185,28,28,.18));transform:translateY(-1px)}
+    /* Whitelist overlay */
+    .wl-overlay{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.72);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center}
+    .wl-overlay.show{display:flex}
+    .wl-card{background:linear-gradient(160deg,#064e3b,#022c22);border:2px solid rgba(34,197,94,.45);border-radius:20px;padding:44px 36px;text-align:center;max-width:460px;width:90%;box-shadow:0 0 60px rgba(34,197,94,.12)}
+    .wl-card .wl-shield{font-size:52px;margin-bottom:14px}
+    .wl-card h2{color:#22c55e;font-size:21px;font-weight:800;margin:0 0 6px}
+    .wl-card .wl-domain{color:#6ee7b7;font-size:13px;margin-bottom:10px;word-break:break-all}
+    .wl-card p{color:#a7f3d0;font-size:14px;margin:0 0 22px;line-height:1.6}
+    .btn-wl-go{background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-size:15px;padding:13px 34px;border-radius:10px;font-weight:700;cursor:pointer;border:none;box-shadow:0 4px 18px rgba(34,197,94,.28);transition:all .2s}
+    .btn-wl-go:hover{transform:translateY(-2px);box-shadow:0 6px 26px rgba(34,197,94,.38)}
+    .hidden{display:none!important}
+  </style>
+</head>
+<body>
+  <!-- Whitelist overlay (hiện khi whitelist) -->
+  <div class="wl-overlay" id="whitelistOverlay">
+    <div class="wl-card">
+      <div class="wl-shield">🛡️</div>
+      <h2>Trang web đã được xác thực</h2>
+      <div class="wl-domain" id="wlDomain"></div>
+      <p>Domain này đã được kiểm tra và xác nhận an toàn.<br>Bạn có thể yên tâm truy cập.</p>
+      <button class="btn-wl-go" id="whitelistGo">🔓 Tiếp tục truy cập</button>
+    </div>
+  </div>
+  <!-- Blocking page -->
+  <div class="block-wrap" id="blockWrap" style="display:none;">
+    <div class="block-logo">
+      <img src="assets/antiScamLogo.png" alt="AntiScam">
+      <span>AntiScam</span>
+    </div>
+    <div class="shield-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+    </div>
+    <div class="block-domain" id="blockDomain">www.site.com</div>
+    <h1 class="block-headline" id="blockHeadline">Trang web này không an toàn</h1>
+    <div id="listTypeBadge" class="hidden"><span id="listTypeBadgeContent"></span></div>
+    <div class="block-reason-text hidden" id="listTypeReason"></div>
+    <div class="block-reasons" id="blockReasons">
+      <ol>
+        <li>Trang giả mạo, lừa đảo lấy tiền hoặc thông tin cá nhân</li>
+        <li>Chứa mã độc hoặc nội dung không phù hợp</li>
+        <li>Giả mạo thương hiệu hoặc bôi nhọ danh dự</li>
+        <li>Nội dung vi phạm pháp luật</li>
+      </ol>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-close" id="close">🔒 Đóng trang</button>
+      <button class="btn btn-allow" id="allow">⚡ Tôi vẫn muốn truy cập</button>
+    </div>
+  </div>
+  <script src="/js/blocking.js"></script>
+</body>
+</html>

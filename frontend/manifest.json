@@ -1,6 +1,6 @@
 {
   "name": "AntiScam",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Bảo vệ bạn khỏi các trang web lừa đảo, mã độc và ăn cắp thông tin.",
   "homepage_url": "https://antiscam.vn/",
   "permissions": [
@@ -38,7 +38,8 @@
       "resources": [
         "js/blocking.js",
         "js/page_hooks.js",
-        "blocking.html"
+        "blocking.html",
+        "js/network_hooks.js"
       ],
       "matches": [
         "<all_urls>"
@@ -52,5 +53,8 @@
     "48": "assets/antiScamLogo.png",
     "128": "assets/antiScamLogo.png"
   },
-  "manifest_version": 3
+  "manifest_version": 3,
+  "optional_permissions": [
+    "geolocation"
+  ]
 }

@@ -44,6 +44,7 @@ const BRANDS = [
   { name: 'ZaloPay',      keys: ['zalopay'],              official: ['zalopay.vn'] },
   { name: 'PayPal',       keys: ['paypal'],               official: ['paypal.com', 'pypl.com'] },
   { name: 'Amazon',       keys: ['amazon', 'amazn'],      official: ['amazon.com', 'amazon.co', 'amzn.com', 'aws.amazon.com'] },
+  { name: 'MongoDB',    keys: ['mongodb'],             official: ['mongodb.com', 'cloud.mongodb.com', 'atlas.mongodb.com', 'cloud-ml.mongodb.com', 'realm.mongodb.com', 'data.mongodb.com'] },
   { name: 'Netflix',      keys: ['netflix'],              official: ['netflix.com', 'nflxvideo.net'] },
   { name: 'GitHub',       keys: ['github'],               official: ['github.com', 'githubusercontent.com', 'githubassets.com'] },
   { name: 'Shopee',       keys: ['shopee'],               official: ['shopee.vn', 'shopee.com', 'shopeemobile.com'] },
@@ -65,7 +66,7 @@ const BRANDS = [
 const REPUTATION_WHITELIST = new Set([
   'google.com', 'youtube.com', 'github.com', 'githubusercontent.com', 'microsoft.com',
   'openai.com', 'chatgpt.com', 'cloudflare.com', 'facebook.com', 'instagram.com',
-  'zalo.me', 'zaloapp.com', 'apple.com', 'amazon.com', 'paypal.com', 'netflix.com',
+  'zalo.me', 'zaloapp.com', 'apple.com', 'amazon.com', 'paypal.com', 'netflix.com', 'mongodb.com', 'cloud.mongodb.com', 'atlas.mongodb.com', 'cloud-ml.mongodb.com',
   'linkedin.com', 'twitter.com', 'x.com', 'wikipedia.org', 'mozilla.org', 'stripe.com',
   'stackoverflow.com', 'stackexchange.com', 'serverfault.com', 'superuser.com', 'gitlab.com',
   'vietcombank.com.vn', 'bidv.com.vn', 'mbbank.com.vn', 'techcombank.com.vn',
@@ -74,6 +75,7 @@ const REPUTATION_WHITELIST = new Set([
   'vnpay.vn', 'fpt.com.vn', 'fpt.vn', 'viettel.com.vn', 'viettel.vn',
   'vingroup.net', 'vinhomes.vn', 'vinfastauto.com', 'vinfast.vn',
   'outlook.com', 'live.com', 'office.com', 'bing.com', 'whatsapp.com', 'telegram.org',
+  'mongodb.com', 'cloud.mongodb.com', 'atlas.mongodb.com',
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════
