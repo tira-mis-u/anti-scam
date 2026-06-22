@@ -565,7 +565,7 @@ const injectPageHooksResource = () => {
     if (document.getElementById('__antiscam_page_hooks')) return;
     const s = document.createElement('script');
     s.id = '__antiscam_page_hooks';
-    s.src = chrome.runtime.getURL('js/page_hooks.js');
+    s.src = chrome.runtime.getURL('scripts/content/page_hooks.js');
     s.async = false;
     (document.documentElement || document.head || document).appendChild(s);
     s.onload = () => { try { s.remove(); } catch (_) {} };
@@ -602,7 +602,7 @@ const injectNetworkHook = () => {
     if (document.getElementById('__antiscam_net_hook')) return;
     const s = document.createElement('script');
     s.id = '__antiscam_net_hook';
-    s.src = chrome.runtime.getURL('js/network_hooks.js');
+    s.src = chrome.runtime.getURL('scripts/content/network_hooks.js');
     s.async = false;
     (document.documentElement || document.head || document).appendChild(s);
     s.onload = () => { try { s.remove(); } catch (_) {} };

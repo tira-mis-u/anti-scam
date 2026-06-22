@@ -1,7 +1,9 @@
 /* global chrome */
 /* global psl */
 
-importScripts('heuristic.js'); // Engine V2: computeScore
+// Engine V2 (computeScore) — sourced from packages/shared/heuristic.js
+// and synced into apps/extension/scripts/shared/ by `npm run build:extension`.
+importScripts('../shared/heuristic.js');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Logger
@@ -552,7 +554,7 @@ const blockingFunction = (url, blackSite, tabId, opts = {}) => {
       url 
     }).catch(()=>{});
 
-    chrome.tabs.update(tabId, { url: `${chrome.runtime.getURL('blocking.html')}#${JSON.stringify(message)}` }).catch(e=>logger.error('blocking', e));
+    chrome.tabs.update(tabId, { url: `${chrome.runtime.getURL('pages/blocking/index.html')}#${JSON.stringify(message)}` }).catch(e=>logger.error('blocking', e));
   });
 };
 

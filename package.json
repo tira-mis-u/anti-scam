@@ -1,0 +1,16 @@
+{
+  "name": "anti-scam",
+  "private": true,
+  "version": "1.7.0",
+  "description": "Browser Extension, Android App (React Native), Backend API",
+  "workspaces": [
+    "backend",
+    "apps/*"
+  ],
+  "scripts": {
+    "sync:shared": "node -e \"const fs=require('fs');fs.rmSync('apps/extension/scripts/shared',{recursive:true,force:true});fs.mkdirSync('apps/extension/scripts/shared',{recursive:true});for(const f of ['heuristic.js','features.js'])fs.copyFileSync('packages/'+f,'apps/extension/scripts/shared/'+f);console.log('synced packages/*.js -> apps/extension/scripts/shared/');\"",
+    "build:extension": "npm run sync:shared",
+    "dev:extension":   "npm run sync:shared",
+    "start:backend":   "npm --prefix backend start"
+  }
+}

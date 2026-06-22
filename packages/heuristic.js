@@ -1,4 +1,4 @@
-// js/heuristic.js  —  ENGINE V2
+// packages/heuristic.js  —  ENGINE V2
 // ─────────────────────────────────────────────────────────────────────────────
 // MÔ HÌNH MỚI:  Final Score = clamp( 50 + TrustScore − RiskScore , 0, 100 )
 //

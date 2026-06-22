@@ -16,10 +16,10 @@
     "*://*/*"
   ],
   "background": {
-    "service_worker": "js/background.js"
+    "service_worker": "scripts/background/background.js"
   },
   "action": {
-    "default_popup": "plugin_ui.html"
+    "default_popup": "pages/popup/index.html"
   },
   "content_scripts": [
     {
@@ -28,8 +28,8 @@
         "https://*/*"
       ],
       "js": [
-        "js/jquery.js",
-        "js/features.js"
+        "scripts/vendor/jquery.js",
+        "scripts/shared/features.js"
       ],
       "run_at": "document_start"
     }
@@ -37,10 +37,10 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "js/blocking.js",
-        "js/page_hooks.js",
-        "blocking.html",
-        "js/network_hooks.js"
+        "scripts/ui/blocking.js",
+        "scripts/content/page_hooks.js",
+        "scripts/content/network_hooks.js",
+        "pages/blocking/index.html"
       ],
       "matches": [
         "<all_urls>"
