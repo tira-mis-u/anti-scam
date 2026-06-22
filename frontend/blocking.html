@@ -7,51 +7,64 @@
   <link rel="icon" type="image/png" href="assets/antiScamLogo.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Asap:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link href="blocking.css" type="text/css" rel="stylesheet">
+  <link href="percentage.css" type="text/css" rel="stylesheet">
+  <link href="plugin_ui.css" type="text/css" rel="stylesheet">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:'Inter',ui-sans-serif,system-ui,sans-serif;background:#0a0a0f;color:#e5e7eb;min-height:100vh;overflow-x:hidden}
+    body{font-family:'Asap',ui-sans-serif,system-ui,sans-serif;background:#0a0a0f;color:#e5e7eb;min-height:100vh;overflow-x:hidden; width: 100%; max-width: 100%; min-width: 100%;}
     body::before{content:'';position:fixed;inset:0;z-index:0;background:radial-gradient(ellipse 80% 50% at 50% -5%,rgba(239,68,68,.1),transparent),radial-gradient(ellipse 50% 30% at 80% 100%,rgba(239,68,68,.04),transparent);pointer-events:none}
-    .block-wrap{position:relative;z-index:1;max-width:600px;margin:0 auto;padding:48px 24px 60px;display:flex;flex-direction:column;align-items:center;text-align:center}
+    .block-wrap{position:relative;z-index:1;max-width:650px;margin:0 auto;padding:48px 24px 60px;display:flex;flex-direction:column;align-items:center;text-align:center}
     .block-logo{display:flex;align-items:center;gap:10px;margin-bottom:36px}
     .block-logo img{width:40px;height:40px}
     .block-logo span{font-size:20px;font-weight:800;background:linear-gradient(135deg,#ef4444,#f97316);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-    .shield-wrap{width:96px;height:96px;background:linear-gradient(135deg,rgba(239,68,68,.12),rgba(239,68,68,.03));border:2px solid rgba(239,68,68,.25);border-radius:50%;display:grid;place-items:center;margin-bottom:24px;animation:shieldPulse 3s ease infinite}
-    .shield-wrap svg{width:44px;height:44px}
-    @keyframes shieldPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.18)}50%{box-shadow:0 0 0 14px rgba(239,68,68,0)}}
-    .block-domain{font-size:13px;font-weight:500;color:#9ca3af;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:8px 16px;margin-bottom:14px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .block-headline{font-size:22px;font-weight:800;line-height:1.35;margin-bottom:10px;color:#f87171}
-    /* ═══ BADGE TÍN HIỆU - VIỆT HOÁ NGẮN (KHÔNG VÀNG) ═══ */
-    .badge-row{display:inline-flex;align-items:center;gap:8px;padding:9px 20px;border-radius:10px;font-weight:700;font-size:14px;margin:14px auto 4px}
-    .badge-row .b-icon{font-size:17px;flex-shrink:0}
-    .badge-row.badge-den{background:linear-gradient(135deg,rgba(239,68,68,.16),rgba(185,28,28,.1));border:1.5px solid rgba(239,68,68,.4);color:#fca5a5}
-    .badge-row.badge-cam{background:linear-gradient(135deg,rgba(249,115,22,.16),rgba(194,65,12,.1));border:1.5px solid rgba(249,115,22,.4);color:#fdba74}
-    .badge-row.badge-xanh{background:linear-gradient(135deg,rgba(34,197,94,.14),rgba(22,163,74,.09));border:1.5px solid rgba(34,197,94,.35);color:#86efac}
-    .block-reason-text{color:#9ca3af;font-size:13px;line-height:1.65;max-width:500px;margin:10px auto 0}
-    .block-reasons{text-align:left;margin:22px auto;padding:18px 22px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.05);border-radius:12px;max-width:500px;width:100%}
-    .block-reasons li{font-size:13px;color:#b0b8c4;line-height:1.65;margin-bottom:5px;list-style-position:inside}
-    .btn-row{display:flex;gap:12px;margin-top:28px;flex-wrap:wrap;justify-content:center}
-    .btn{padding:11px 26px;border-radius:10px;font-weight:700;font-size:14px;cursor:pointer;border:none;transition:all .2s;display:inline-flex;align-items:center;gap:8px}
-    .btn-close{background:linear-gradient(135deg,#374151,#1f2937);color:#e5e7eb;border:1px solid rgba(255,255,255,.08)}
-    .btn-close:hover{background:linear-gradient(135deg,#4b5563,#374151);transform:translateY(-1px)}
-    .btn-allow{background:linear-gradient(135deg,rgba(239,68,68,.18),rgba(185,28,28,.12));color:#fca5a5;border:1.5px solid rgba(239,68,68,.3)}
-    .btn-allow:hover{background:linear-gradient(135deg,rgba(239,68,68,.28),rgba(185,28,28,.18));transform:translateY(-1px)}
+    
+    .block-domain{font-size:16px;font-weight:700;color:#fca5a5;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:12px;padding:10px 20px;margin-bottom:24px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .block-headline{font-size:26px;font-weight:800;line-height:1.35;margin-bottom:20px;color:#f87171}
+
+    /* ═══ SCAN UI ═══ */
+    .scan-container { width: 100%; background: rgba(255,255,255,.02); border: 1px solid rgba(255,255,255,.05); border-radius: 20px; padding: 30px; margin-bottom: 24px; }
+    .percentage-wrap { display: flex; flex-direction: column; align-items: center; margin-bottom: 20px; }
+    #site_msg { font-size: 16px; font-weight: 600; margin-top: 15px; color: #e5e7eb; }
+    #site_msg.warning { color: #fb923c; }
+    #site_msg.safe { color: #22c55e; }
+    .accuracy-note { font-size: 12px; opacity: 0.7; margin-top: 4px; }
+
+    .collapsible { background: rgba(96,165,250,0.05); color: #60a5fa; font-size: 14px; font-weight: 700; border: 1px solid rgba(96,165,250,0.3); border-radius: 30px; padding: 10px 24px; margin: 15px auto; cursor: pointer; transition: all 0.25s; display: flex; align-items: center; gap: 8px; justify-content: center; width: auto; outline: none; }
+    .collapsible:hover { background: rgba(96,165,250,0.15); border-color: #60a5fa; color: #fff; box-shadow: 0 0 15px rgba(96,165,250,0.2); }
+    .collapsible.active { background: #60a5fa; color: #000; border-color: #60a5fa; }
+    .collapsible:after { content: "\002B"; font-weight: bold; }
+    .collapsible.active:after { content: "\2212"; }
+
+    .feature-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out; width: 100%; }
+    #features { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; padding: 10px 0; list-style: none; }
+    
+    /* Chips override */
+    .feature-chip { margin: 4px; }
+
+    /* ═══ BUTTONS ═══ */
+    .btn-row{display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;justify-content:center; width: 100%;}
+    .btn{padding:14px 32px;border-radius:30px;font-weight:700;font-size:15px;cursor:pointer;border:none;transition:all .2s;display:inline-flex;align-items:center;gap:10px; flex: 1; min-width: 200px; justify-content: center;}
+    .btn-close{background:rgba(255,255,255,.05);color:#e5e7eb;border:1px solid rgba(255,255,255,.1)}
+    .btn-close:hover{background:rgba(255,255,255,.1);transform:translateY(-1px)}
+    .btn-allow{background:linear-gradient(135deg,rgba(239,68,68,.2),rgba(185,28,28,.15));color:#fca5a5;border:1.5px solid rgba(239,68,68,.4)}
+    .btn-allow:hover{background:linear-gradient(135deg,rgba(239,68,68,.3),rgba(185,28,28,.2));transform:translateY(-1px)}
+
+    /* ═══ REPORT UI OVERRIDE ═══ */
+    #community_report { width: 100%; margin-top: 30px; text-align: left; background: var(--panel-bg); border: 1px solid var(--border-soft); border-radius: 20px; padding: 24px; display: none; box-shadow: 0 14px 30px rgba(0,0,0,0.16);}
+    
     /* Whitelist overlay */
     .wl-overlay{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.72);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center}
     .wl-overlay.show{display:flex}
     .wl-card{background:linear-gradient(160deg,#064e3b,#022c22);border:2px solid rgba(34,197,94,.45);border-radius:20px;padding:44px 36px;text-align:center;max-width:460px;width:90%;box-shadow:0 0 60px rgba(34,197,94,.12)}
-    .wl-card .wl-shield{font-size:52px;margin-bottom:14px}
-    .wl-card h2{color:#22c55e;font-size:21px;font-weight:800;margin:0 0 6px}
-    .wl-card .wl-domain{color:#6ee7b7;font-size:13px;margin-bottom:10px;word-break:break-all}
-    .wl-card p{color:#a7f3d0;font-size:14px;margin:0 0 22px;line-height:1.6}
     .btn-wl-go{background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-size:15px;padding:13px 34px;border-radius:10px;font-weight:700;cursor:pointer;border:none;box-shadow:0 4px 18px rgba(34,197,94,.28);transition:all .2s}
-    .btn-wl-go:hover{transform:translateY(-2px);box-shadow:0 6px 26px rgba(34,197,94,.38)}
+    
     .hidden{display:none!important}
   </style>
 </head>
-<body>
-  <!-- Whitelist overlay (hiện khi whitelist) -->
+<body data-theme="dark">
   <div class="wl-overlay" id="whitelistOverlay">
     <div class="wl-card">
       <div class="wl-shield">🛡️</div>
@@ -61,35 +74,121 @@
       <button class="btn-wl-go" id="whitelistGo">🔓 Tiếp tục truy cập</button>
     </div>
   </div>
-  <!-- Blocking page -->
+
   <div class="block-wrap" id="blockWrap" style="display:none;">
     <div class="block-logo">
       <img src="assets/antiScamLogo.png" alt="AntiScam">
       <span>AntiScam</span>
     </div>
-    <div class="shield-wrap">
-      <svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-        <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-      </svg>
-    </div>
+    
+    <h1 class="block-headline">Trang web này không an toàn</h1>
     <div class="block-domain" id="blockDomain">www.site.com</div>
-    <h1 class="block-headline" id="blockHeadline">Trang web này không an toàn</h1>
-    <div id="listTypeBadge" class="hidden"><span id="listTypeBadgeContent"></span></div>
-    <div class="block-reason-text hidden" id="listTypeReason"></div>
-    <div class="block-reasons" id="blockReasons">
-      <ol>
-        <li>Trang giả mạo, lừa đảo lấy tiền hoặc thông tin cá nhân</li>
-        <li>Chứa mã độc hoặc nội dung không phù hợp</li>
-        <li>Giả mạo thương hiệu hoặc bôi nhọ danh dự</li>
-        <li>Nội dung vi phạm pháp luật</li>
-      </ol>
+
+    <div class="scan-container">
+      <div class="percentage-wrap">
+        <div id="percentage_content" class="c100 center">
+          <span id="site_score" class="score">0%</span>
+          <div class="slice"><div class="bar"></div><div class="fill"></div></div>
+        </div>
+        <div id="site_msg">Đang đánh giá rủi ro...</div>
+      </div>
+
+      <button type="button" class="collapsible" id="toggleDetails">Xem chi tiết phân tích</button>
+      <div class="feature-content" id="featureContent">
+        <ul id="features"></ul>
+      </div>
     </div>
+
     <div class="btn-row">
-      <button class="btn btn-close" id="close">Báo cáo</button>
+      <button class="btn btn-close" id="reportToggle">Báo cáo website</button>
       <button class="btn btn-allow" id="allow">Tiếp tục truy cập</button>
     </div>
+
+    <div id="community_report">
+        <div id="reportForm" class="report-panel">
+            <div class="report-current-target">
+              <div class="report-info-row">
+                <span class="report-info-label">URL đang báo cáo</span>
+                <span id="reportCurrentUrl" class="report-info-value">Đang lấy URL...</span>
+              </div>
+              <div class="report-info-row">
+                <span class="report-info-label">Tên miền</span>
+                <span id="reportCurrentDomain" class="report-info-value">Đang lấy tên miền...</span>
+              </div>
+            </div>
+
+            <label class="report-field-label">Trạng thái website <span class="required-mark">*</span></label>
+            <div class="report-type-selector">
+              <label class="report-type-option">
+                <input type="radio" name="reportType" value="malicious" checked>
+                <div class="report-type-card malicious">
+                  <span>Độc hại</span>
+                </div>
+              </label>
+              <label class="report-type-option">
+                <input type="radio" name="reportType" value="safe">
+                <div class="report-type-card safe">
+                  <span>An toàn</span>
+                </div>
+              </label>
+            </div>
+
+            <label class="report-field-label" for="reportCategory">Loại báo cáo <span class="required-mark">*</span></label>
+            <div class="report-select-wrapper">
+              <select id="reportCategory" class="report-input report-select" required>
+                <option value="" disabled selected>Chọn loại báo cáo</option>
+                <optgroup label="Website độc hại" id="maliciousCategories">
+                  <option value="phishing_login">Giả mạo đăng nhập (Phishing)</option>
+                  <option value="scam_fraud">Lừa đảo (Scam/Fraud)</option>
+                  <option value="malware">Phát tán mã độc (Malware)</option>
+                  <option value="fake_store">Cửa hàng giả mạo</option>
+                  <option value="spam">Spam</option>
+                </optgroup>
+                <optgroup label="Website an toàn" id="safeCategories" hidden>
+                  <option value="official_brand">Thương hiệu chính thức</option>
+                  <option value="bank_finance">Ngân hàng / Tài chính</option>
+                  <option value="e_commerce">Thương mại điện tử lớn</option>
+                  <option value="social_media">Mạng xã hội phổ biến</option>
+                  <option value="payment_gateway">Cổng thanh toán</option>
+                  <option value="educational">Giáo dục / Chính phủ</option>
+                  <option value="trusted_service">Dịch vụ tin cậy</option>
+                </optgroup>
+                <option value="other">Khác</option>
+              </select>
+            </div>
+
+            <div id="otherCategoryWrap" class="report-field-group" hidden>
+              <label class="report-field-label" for="reportCategoryOther">Lý do cụ thể <span class="required-mark">*</span></label>
+              <input type="text" id="reportCategoryOther" class="report-input" placeholder="Nhập lý do khác của bạn...">
+            </div>
+
+            <label class="report-field-label" for="reportDescription">Mô tả chi tiết <span class="required-mark">*</span></label>
+            <textarea id="reportDescription" class="report-input" minlength="20" maxlength="1000" placeholder="Lý do bạn báo cáo website này..."></textarea>
+            <div class="report-hint" id="reportHint">Ví dụ: Website giả mạo ngân hàng, yêu cầu nhập OTP, mạo danh Shopee.</div>
+            <div id="reportDescriptionCount" class="report-counter">0/1000 ký tự</div>
+
+            <label class="report-field-label">Ảnh minh chứng <span class="optional-mark">(tùy chọn)</span></label>
+            <div class="report-upload-row">
+              <label for="reportScreenshot" class="report-upload-btn">Tải ảnh lên</label>
+              <input id="reportScreenshot" type="file" accept="image/png,image/jpeg,image/jpg,image/webp" hidden>
+              <span id="reportFileName" class="report-file-name">PNG, JPG, JPEG, WEBP · tối đa 5MB</span>
+            </div>
+            <div id="reportImagePreviewWrap" class="report-image-preview-wrap" hidden>
+              <img id="reportImagePreview" class="report-image-preview" alt="Ảnh minh chứng xem trước">
+              <button id="reportRemoveImage" type="button" class="report-remove-image">Xóa ảnh</button>
+            </div>
+
+            <div class="report-actions">
+              <button id="sendReport" type="button">Gửi báo cáo</button>
+              <button id="reportCancel" type="button">Huỷ</button>
+              <span id="reportStatus"></span>
+            </div>
+        </div>
+    </div>
   </div>
-  <script src="/js/blocking.js"></script>
+
+  <script src="js/jquery.js"></script>
+  <script src="js/ui_commons.js"></script>
+  <script src="js/blocking.js"></script>
 </body>
 </html>

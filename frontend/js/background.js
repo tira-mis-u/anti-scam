@@ -335,10 +335,32 @@ const isRiskBlockAllowed = (tabId) => {
 const shouldAutoBlock = (assessment, reputation) => {
   if (!assessment || !reputation) return false;
   if (reputation.inWhitelist || reputation.isOfficialBrand) return false;
+
+  const finalScore = assessment.finalScore || 0;
   const risk = assessment.riskScore || 0;
   const conf = assessment.confidence || 0;
-  const finalScore = assessment.finalScore || 0;
-  return conf >= 45 && (risk >= RISK_BLOCK_THRESHOLD || (finalScore <= 30 && risk >= 35));
+  const findings = assessment.findings || [];
+
+  // Chỉ block khi điểm an toàn dưới 50 theo yêu cầu người dùng
+  if (finalScore >= 50) return false;
+
+  // Danh sách các tín hiệu cực kỳ nguy hiểm (ăn cắp thông tin ẩn hoặc mã độc)
+  const criticalSignals = [
+    'MalwareReputation', 'FormHijack', 'FormDest', 'DataExfil', 
+    'Keylogger', 'DangerousDownload', 'RedirectBadHop', 
+    'BrandImpersonation', 'Homograph', 'Typosquat'
+  ];
+
+  const hasCriticalSignal = findings.some(f => criticalSignals.includes(f.key));
+  const highRiskSignals = findings.filter(f => f.points >= 15).length;
+
+  // Điều kiện block: 
+  // 1. Có ít nhất một tín hiệu cực kỳ nguy hiểm 
+  // 2. Hoặc có nhiều (từ 2 trở lên) tín hiệu rủi ro cao 
+  // 3. Và độ tin cậy của dữ liệu phân tích phải đủ lớn (conf >= 45)
+  const isDangerousEnough = hasCriticalSignal || highRiskSignals >= 2 || risk >= 60;
+
+  return conf >= 45 && isDangerousEnough;
 };
 
 
@@ -368,7 +390,16 @@ const classify = async (tabId, featuresResult, urlString, domInput = {}, isUpdat
           riskScore: cached.riskScore || 0, trustScore: cached.trustScore || 0, trustContext: cached.trustContext || null,
           result: cached.result || {}, summary: cached.summary || '', explanations: cached.explanations || [], isUnknown: cached.isUnknown, url: urlString });
         updateBadge(cached.isPhish, cached.legitimatePercent, tabId);
-        if (!isRiskBlockAllowed(tabId) && cached.riskScore >= RISK_BLOCK_THRESHOLD && cached.confidence >= 45) {
+        
+        // SỬA LỖI: Sử dụng chung logic shouldAutoBlock để đảm bảo đồng nhất, 
+        // không tự ý block dựa trên riskScore cũ trong cache.
+        const assessment = { 
+          finalScore: cached.legitimatePercent, 
+          riskScore: cached.riskScore, 
+          confidence: cached.confidence,
+          findings: Object.entries(cached.result || {}).map(([k, v]) => ({ key: k, points: v === '1' ? 25 : (v === '2' ? 15 : 5) }))
+        };
+        if (!isRiskBlockAllowed(tabId) && shouldAutoBlock(assessment, reputation)) {
           blockingFunction(urlString, `Mức rủi ro ${cached.riskScore}/100`, tabId, { summary: cached.summary || 'Trang có nhiều tín hiệu nguy hiểm.' });
         }
         return;
@@ -491,19 +522,64 @@ const classify = async (tabId, featuresResult, urlString, domInput = {}, isUpdat
 const blockingFunction = (url, blackSite, tabId, opts = {}) => {
   // Xác định loại cảnh báo: blacklist / pornlist / riskblock / whitelist
   const listType = opts.listType || (opts.summary ? 'riskblock' : 'blacklist');
-  const message = { site: url, match: blackSite, title: url, lenient: inputBlockLenient, riskBlock: !!opts.summary,
-    listType,
-    reason: opts.summary || '', favicon: `https://www.google.com/s2/favicons?domain=${url}` };
-  setTabState(tabId, { status: ANALYSIS_STATUS.SUCCESS, isBlocked: url, isPhish: true,
-    legitimatePercent: 0, confidence: 95, result: {}, summary: opts.summary || 'Trang này nằm trong danh sách đen đã xác nhận.', url }).catch(()=>{});
-  chrome.tabs.update(tabId, { url: `${chrome.runtime.getURL('blocking.html')}#${JSON.stringify(message)}` }).catch(e=>logger.error('blocking', e));
+  
+  // Lấy dữ liệu phân tích hiện tại để truyền vào trang block
+  getTabState(tabId).then(state => {
+    const message = { 
+      site: url, 
+      match: blackSite, 
+      title: url, 
+      lenient: inputBlockLenient, 
+      riskBlock: !!opts.summary,
+      listType,
+      reason: opts.summary || '', 
+      favicon: `https://www.google.com/s2/favicons?domain=${url}`,
+      // Truyền thêm dữ liệu phân tích để UI block hiển thị ngay
+      result: (state && state.result) || {},
+      explanations: (state && state.explanations) || [],
+      finalScore: (state && state.legitimatePercent) || 0,
+      confidence: (state && state.confidence) || 0
+    };
+
+    setTabState(tabId, { 
+      status: ANALYSIS_STATUS.SUCCESS, 
+      isBlocked: url, 
+      isPhish: true,
+      legitimatePercent: state ? state.legitimatePercent : 0, 
+      confidence: state ? state.confidence : 95, 
+      result: state ? state.result : {}, 
+      summary: opts.summary || 'Trang này nằm trong danh sách đen đã xác nhận.', 
+      url 
+    }).catch(()=>{});
+
+    chrome.tabs.update(tabId, { url: `${chrome.runtime.getURL('blocking.html')}#${JSON.stringify(message)}` }).catch(e=>logger.error('blocking', e));
+  });
 };
 
 const safeCheck = ({ url, tabId }) => {
   if (!url || url.startsWith('chrome://') || url.startsWith(chrome.runtime.getURL('/'))) return;
+
+  // Kiểm tra Whitelist trước khi chặn
+  const cur = createUrlObject(url);
+  if (!cur) return;
+  const domain = cur.hostname.toLowerCase();
+  const registrable = getRegistrable(domain);
+
+  // Nếu nằm trong whitelist thì bỏ qua kiểm tra danh sách đen
+  let inWhitelist = (typeof REPUTATION_WHITELIST !== 'undefined' && REPUTATION_WHITELIST.has(registrable));
+  if (!inWhitelist) {
+    for (const w of whiteListingSet) {
+      if (w.includes(domain) || w.includes(registrable)) {
+        inWhitelist = true;
+        break;
+      }
+    }
+  }
+  if (inWhitelist) return;
+
   if (blackListingSet.has(url) || blackListingSet.has(url.replace(/\/$/,''))) { blockingFunction(url, url, tabId); return; }
   if (!blackListing || !blackListing.length) return;
-  const cur = createUrlObject(url); if (!cur) return;
+
   let curDom = ''; try { if (typeof psl!=='undefined') curDom = psl.parse(cur.host).domain || ''; } catch { curDom = cur.host; }
   const curPath = cur.href.replaceAll('/','');
   for (let i=0;i<blackListing.length;++i) {

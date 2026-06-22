@@ -76,6 +76,7 @@ const REPUTATION_WHITELIST = new Set([
   'vingroup.net', 'vinhomes.vn', 'vinfastauto.com', 'vinfast.vn',
   'outlook.com', 'live.com', 'office.com', 'bing.com', 'whatsapp.com', 'telegram.org',
   'mongodb.com', 'cloud.mongodb.com', 'atlas.mongodb.com',
+  'phishtank.com', 'virustotal.com', 'chongluadao.vn', 'tinnhiemmang.vn'
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════
