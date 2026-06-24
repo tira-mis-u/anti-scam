@@ -11,7 +11,7 @@ const IS_DEV = !('update_url' in chrome.runtime.getManifest());
 const logger = {
   info: (...a) => IS_DEV && console.info('[AntiScam]', ...a),
   warn: (...a) => IS_DEV && console.warn('[AntiScam]', ...a),
-  error: (...a) => IS_DEV && console.error('[AntiScam]', ...a),
+  error: (...a) => { try { console.error('[AntiScam]', ...a); } catch(_) {} },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,29 +31,86 @@ const riskBlockAllowUntil = new Map();
 const ipRe = /^(\d{1,3}\.){3}\d{1,3}$/;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Circuit Breaker
+// Circuit Breaker V2 — Half-Open + Exponential Backoff + Auto Recovery
 // ─────────────────────────────────────────────────────────────────────────────
-const circuitBreaker = { antiScamApi:{failures:0,openUntil:0}, openPhish:{failures:0,openUntil:0}, backendIntel:{failures:0,openUntil:0} };
-const CB_THRESHOLD = 3, CB_TIMEOUT_MS = 30_000;
-const checkCB = (s) => { const cb = circuitBreaker[s]; if (Date.now() < cb.openUntil) { logger.warn(`CB OPEN ${s}`); return false; } return true; };
-const recFail = (s) => { const cb = circuitBreaker[s]; cb.failures++; if (cb.failures >= CB_THRESHOLD) { cb.openUntil = Date.now() + CB_TIMEOUT_MS; logger.error(`CB TRIPPED ${s}`); } };
-const recOK = (s) => { circuitBreaker[s].failures = 0; };
+const circuitBreaker = {
+  antiScamApi:  { failures:0, openUntil:0, lastFailure:0 },
+  openPhish:    { failures:0, openUntil:0, lastFailure:0 },
+  backendIntel: { failures:0, openUntil:0, lastFailure:0 },
+};
+const CB_THRESHOLD = 3;
 
-const fetchWithRetry = async (u, source, isJson=true, retries=MAX_RETRIES) => {
-  if (!checkCB(source)) return null;
-  for (let attempt=0; attempt<retries; attempt++) {
+/**
+ * Half-Open Circuit Breaker:
+ * - Khi timeout het, tu dong reset failures => cho phep 1 probe request
+ * - Exponential backoff: moi lan trip, timeout gap doi (max 2 phut)
+ * - recOK reset hoan toan => circuit khoe lai ngay khi backend online
+ */
+const checkCB = (service) => {
+  const cb = circuitBreaker[service];
+  if (!cb) return true;
+  const now = Date.now();
+  if (cb.openUntil > 0 && now >= cb.openUntil) {
+    logger.warn("[CB_HALF_OPEN] " + service + " — reset failures, allowing probe");
+    cb.failures = 0;
+    cb.openUntil = 0;
+    return true;
+  }
+  if (now < cb.openUntil) {
+    logger.warn("[CB_OPEN] " + service + " — blocked for " + ((cb.openUntil-now)/1000).toFixed(0) + "s");
+    return false;
+  }
+  return true;
+};
+
+const recFail = (service) => {
+  const cb = circuitBreaker[service];
+  if (!cb) return;
+  cb.failures++;
+  cb.lastFailure = Date.now();
+  if (cb.failures >= CB_THRESHOLD) {
+    const tripCount = Math.floor(cb.failures / CB_THRESHOLD);
+    const timeout = Math.min(10_000 * Math.pow(2, tripCount), 120_000);
+    cb.openUntil = Date.now() + timeout;
+    logger.error("[CB_TRIPPED] " + service + " — opened for " + (timeout/1000) + "s (failures=" + cb.failures + ")");
+  } else {
+    logger.warn("[CB_FAIL] " + service + " — " + cb.failures + "/" + CB_THRESHOLD);
+  }
+};
+
+const recOK = (service) => {
+  const cb = circuitBreaker[service];
+  if (!cb) return;
+  if (cb.failures > 0) {
+    logger.info("[CB_RECOVERED] " + service + " — reset after " + cb.failures + " failures");
+  }
+  cb.failures = 0;
+  cb.openUntil = 0;
+};
+
+const fetchWithRetry = async (url, service, isJson = true, retries = 3) => {
+  if (!checkCB(service)) return null;
+  const maxRetries = Math.max(1, retries);
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const ctrl = new AbortController(); const t = setTimeout(()=>ctrl.abort(), FETCH_TIMEOUT_MS);
-      const res = await fetch(u, { signal: ctrl.signal }); clearTimeout(t);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = isJson ? await res.json() : await res.text();
-      recOK(source); return data;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const data = isJson ? await response.json() : await response.text();
+      recOK(service);
+      return data;
     } catch (err) {
-      logger.warn(`fetch ${attempt+1}/${retries} fail ${u}: ${err.message}`);
-      if (attempt < retries-1) await new Promise(r=>setTimeout(r, 1000*Math.pow(2,attempt)));
+      const errMsg = err.name === "AbortError" ? "timeout" : err.message;
+      logger.warn("[FETCH_FAIL] " + service + " — attempt " + (attempt+1) + "/" + maxRetries + ": " + errMsg);
+      if (attempt < maxRetries - 1) {
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+      }
     }
   }
-  recFail(source); return null;
+  recFail(service);
+  return null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,7 +177,7 @@ const fetchBackendIntel = async (urlString, domain) => {
     const cached = await chrome.storage.session.get(key);
     if (cached && cached[key] && Date.now() - cached[key].timestamp < INTEL_CACHE_TTL_MS) return cached[key].data;
     const payload = encodeURIComponent(urlString || domain || '');
-    const data = await fetchWithRetry(`${BACKEND_BASE}/v1/intel?url=${payload}`, 'backendIntel', true, 1);
+    const data = await fetchWithRetry(`${BACKEND_BASE}/v1/intel?url=${payload}`, 'backendIntel', true, 2);
     if (data && data.status !== 'error') {
       await chrome.storage.session.set({ [key]: { data, timestamp: Date.now() } }); return data;
     }
@@ -766,6 +823,7 @@ const parseHtmlSignals = (urlString, html) => {
  * Phân tích URL bằng fetch + HTML parsing — KHÔNG MỞ TAB
  */
 const fetchAndAnalyzeUrl = async (urlString) => {
+  try { console.log("[FETCH_URL]", urlString); } catch(e){}
   const domain = getDomain(urlString);
   const registrable = getRegistrable(domain);
 

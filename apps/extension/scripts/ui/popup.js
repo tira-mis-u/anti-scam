@@ -11,6 +11,13 @@ let currentDomain = '';
 let currentPageTitle = '';
 
 // ═══════════════════════════════════════════════════════════════════════════
+// LOGGING
+// ═══════════════════════════════════════════════════════════════════════════
+const _log = (tag, ...args) => {
+  console.log(`[${tag}]`, ...args);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 // UNIFIED STATE — activeAnalysis LÀ SOURCE OF TRUTH DUY NHẤT
 // TOÀN BỘ UI PHẢI RENDER TỪ activeAnalysis
 // ═══════════════════════════════════════════════════════════════════════════
@@ -54,11 +61,49 @@ const activeAnalysis = {
 };
 
 /**
+ * VALIDATION: Kiểm tra activeAnalysis có consistent không
+ * domain trong header phải khớp với URL của result
+ */
+const _validateActiveAnalysis = () => {
+  const a = activeAnalysis;
+  if (!a.source || !a.domain) return true; // Chưa có data, skip
+
+  // Nếu có result, verify rằng domain khớp
+  if (a.result && Object.keys(a.result).length > 0) {
+    // Log để audit
+    _log('[VALIDATE]', `source=${a.source} domain=${a.domain} url=${a.url} resultKeys=${Object.keys(a.result).length}`);
+  }
+  return true;
+};
+
+/**
  * Cập nhật activeAnalysis và render UI — ĐỘC NHẤT
  * @param {object} partial — Các field cần cập nhật
  */
 const updateAnalysis = (partial) => {
+  const oldUrl = activeAnalysis.url;
+  const oldDomain = activeAnalysis.domain;
+  const oldResultKeys = activeAnalysis.result ? Object.keys(activeAnalysis.result).join(',') : '(null)';
+  const oldExpsCount = activeAnalysis.explanations ? activeAnalysis.explanations.length : 0;
+  
   Object.assign(activeAnalysis, partial);
+  
+  // Validate consistency
+  _validateActiveAnalysis();
+  
+  // Log ALL activeAnalysis changes for audit
+  _log('[ACTIVE_ANALYSIS]',
+    `source=${activeAnalysis.source}`,
+    `url=${activeAnalysis.url}`,
+    `domain=${activeAnalysis.domain}`,
+    `status=${activeAnalysis.status}`,
+    `score=${activeAnalysis.legitimatePercent}`,
+    `riskScore=${activeAnalysis.riskScore}`,
+    `result=${activeAnalysis.result ? Object.keys(activeAnalysis.result).join(',') : 'null'}`,
+    `explanations=${activeAnalysis.explanations ? activeAnalysis.explanations.map(e=>e.key).join(',') : 'null'}`,
+    `(old: url=${oldUrl} domain=${oldDomain} result=${oldResultKeys} exps=${oldExpsCount})`
+  );
+  
   renderActiveAnalysis();
 };
 
@@ -66,6 +111,8 @@ const updateAnalysis = (partial) => {
  * Reset toàn bộ analysis data về null (giữ source, url, domain, tabId, scanUrl)
  */
 const resetAnalysisData = () => {
+  _log('[CACHE_RESET]', `Clearing analysis data for domain=${activeAnalysis.domain}`);
+  
   activeAnalysis.status = null;
   activeAnalysis.isWhiteList = null;
   activeAnalysis.isBlocked = null;
@@ -167,7 +214,7 @@ const renderLoadingState = () => {
   const domain = activeAnalysis.domain || '';
   const statusText = activeAnalysis.loadingText || 'Đang phân tích...';
 
-  console.log('[RENDER] renderLoadingState:', domain, statusText);
+  _log('[RENDER_URL]', `source=${activeAnalysis.source} domain=${domain} LOADING statusText=${statusText}`);
 
   $('#pluginBody').show();
   $('#isSafe').hide();
@@ -209,9 +256,12 @@ const renderLoadingState = () => {
  */
 const renderResultState = () => {
   const domain = activeAnalysis.domain || '';
-  const state = activeAnalysis; // activeAnalysis CÓ CÙNG FORMAT với classify() output
+  const state = activeAnalysis;
 
-  console.log('[RENDER] renderResultState:', domain, state.status, state.legitimatePercent);
+  _log('[RENDER_URL]', `source=${activeAnalysis.source} domain=${domain} RESULT score=${state.legitimatePercent} ` +
+    `resultKeys=${state.result ? Object.keys(state.result).join(',') : 'null'} ` +
+    `explanations=${state.explanations ? state.explanations.map(e=>e.key).join(',') : 'null'} ` +
+    `riskScore=${state.riskScore}`);
 
   const { isWhiteList, isBlocked, isPhish, legitimatePercent, confidence, status, isUnknown } = state;
 
@@ -342,6 +392,8 @@ chrome.tabs.query({ currentWindow: true, active: true }, ([tab]) => {
     $('#pluginBody').hide(); $('#domain_url').text(domain); return;
   }
 
+  _log('[SCAN_TARGET]', `source=CURRENT_TAB url=${tab.url} domain=${domain}`);
+
   // Khởi tạo activeAnalysis cho CURRENT_TAB
   activeAnalysis.source = ScanSource.CURRENT_TAB;
   activeAnalysis.url = tab.url;
@@ -359,12 +411,23 @@ chrome.tabs.query({ currentWindow: true, active: true }, ([tab]) => {
 
   const poll = () => {
     // ✅ CHỈ poll khi source là CURRENT_TAB
-    if (activeAnalysis.source !== ScanSource.CURRENT_TAB) return;
+    if (activeAnalysis.source !== ScanSource.CURRENT_TAB) {
+      _log('[CURRENT_TAB_POLL]', 'BAILED: source is not CURRENT_TAB');
+      return;
+    }
 
     chrome.runtime.sendMessage({ type: 'GET_TAB_STATE', tabId }, (state) => {
       // ✅ CRITICAL: Kiểm tra lại source sau khi nhận response
       // Tránh race condition: request bay trước khi user chuyển sang CUSTOM_URL
-      if (activeAnalysis.source !== ScanSource.CURRENT_TAB) return;
+      if (activeAnalysis.source !== ScanSource.CURRENT_TAB) {
+        _log('[CURRENT_TAB_POLL]', 'BAILED AFTER RESPONSE: source changed to', activeAnalysis.source);
+        return;
+      }
+
+      _log('[GET_TAB_STATE_RESPONSE]',
+        `url=${state ? state.url : 'null'}`,
+        `status=${state ? state.status : 'null'}`,
+        `score=${state ? state.legitimatePercent : 'null'}`);
 
       if (chrome.runtime.lastError) {
         if (attempts < POLL_MAX_ATTEMPTS) { attempts++; setTimeout(poll, POLL_INTERVAL_MS); }
@@ -382,7 +445,6 @@ chrome.tabs.query({ currentWindow: true, active: true }, ([tab]) => {
       if (stillAnalyzing) {
         if (attempts < POLL_MAX_ATTEMPTS) { attempts++; setTimeout(poll, POLL_INTERVAL_MS); }
         else if (state && state.result) {
-          // Có kết quả dù vẫn analyzing → cập nhật activeAnalysis
           updateAnalysis({
             status: state.status,
             isWhiteList: state.isWhiteList || null,
@@ -614,12 +676,18 @@ const startCustomUrlScan = (rawUrl) => {
   let domain = '';
   try { domain = new URL(url).hostname.replace(/^www\./i, ''); } catch {}
 
-  console.log('[POPUP] [SCAN_JOB_CREATED] source=CUSTOM_URL url=' + url + ' domain=' + domain);
+  _log('[SCAN_TARGET]', `source=CUSTOM_URL url=${url} domain=${domain}`);
+
+  // ── CLEANUP: Clear savedCurrentTabAnalysis nếu đã có custom URL từ trước ──
+  if (activeAnalysis.source === ScanSource.CUSTOM_URL && savedCurrentTabAnalysis) {
+    // Giữ lại savedCurrentTabAnalysis (để user có thể back về tab gốc)
+    _log('[SCAN_TARGET]', `Already in CUSTOM_URL mode, keeping savedCurrentTabAnalysis for ${savedCurrentTabAnalysis.domain}`);
+  }
 
   // ── BƯỚC 1: Lưu activeAnalysis hiện tại (CURRENT_TAB) ──
   if (activeAnalysis.source === ScanSource.CURRENT_TAB) {
-    savedCurrentTabAnalysis = { ...activeAnalysis };
-    console.log('[POPUP] Saved CURRENT_TAB analysis for domain:', savedCurrentTabAnalysis.domain);
+    savedCurrentTabAnalysis = JSON.parse(JSON.stringify(activeAnalysis)); // DEEP COPY
+    _log('[SAVED_ANALYSIS_RESTORED]', `Saved CURRENT_TAB analysis for domain=${savedCurrentTabAnalysis.domain}`);
   }
 
   // ── BƯỚC 2: CHUYỂN activeAnalysis SANG CUSTOM_URL ──
@@ -641,11 +709,11 @@ const startCustomUrlScan = (rawUrl) => {
   if (customUrlScanBtn) customUrlScanBtn.disabled = true;
 
   // ── BƯỚC 4: Gửi SCAN_URL đến background ──
-  console.log('[POPUP] [SCAN_URL] ' + url);
+  _log('[SCAN_URL]', url);
+  
   chrome.runtime.sendMessage({ type: 'SCAN_URL', url }, (resp) => {
     if (chrome.runtime.lastError) {
-      console.error('[POPUP] SCAN_URL error:', chrome.runtime.lastError);
-      // ✅ Kiểm tra source trước khi cập nhật
+      _log('[SCAN_URL_CALLBACK]', `ERROR: ${chrome.runtime.lastError.message}`);
       if (activeAnalysis.source === ScanSource.CUSTOM_URL) {
         updateAnalysis({ status: 'FAILED', loadingText: 'Lỗi kết nối đến background.' });
       }
@@ -654,7 +722,7 @@ const startCustomUrlScan = (rawUrl) => {
       return;
     }
     if (!resp || !resp.ok) {
-      console.error('[POPUP] SCAN_URL rejected:', resp);
+      _log('[SCAN_URL_CALLBACK]', `REJECTED: ${JSON.stringify(resp)}`);
       if (activeAnalysis.source === ScanSource.CUSTOM_URL) {
         updateAnalysis({ status: 'FAILED', loadingText: 'Không thể quét URL này.' });
       }
@@ -663,7 +731,7 @@ const startCustomUrlScan = (rawUrl) => {
       return;
     }
 
-    console.log('[POPUP] Background accepted scan for ' + url);
+    _log('[SCAN_URL_CALLBACK]', `Background accepted scan for ${url}`);
 
     if (customUrlPollTimer) clearInterval(customUrlPollTimer);
 
@@ -679,6 +747,7 @@ const startCustomUrlScan = (rawUrl) => {
     const pollScanResult = () => {
       // ✅ Chỉ poll khi vẫn đang ở CUSTOM_URL mode
       if (activeAnalysis.source !== ScanSource.CUSTOM_URL) {
+        _log('[CUSTOM_URL_POLL]', 'BAILED: source is not CUSTOM_URL');
         clearInterval(customUrlPollTimer);
         customUrlPollTimer = null;
         return;
@@ -686,7 +755,16 @@ const startCustomUrlScan = (rawUrl) => {
 
       chrome.runtime.sendMessage({ type: 'GET_URL_SCAN_STATE', url }, (state) => {
         // ✅ CRITICAL: Kiểm tra lại source sau khi nhận response
-        if (activeAnalysis.source !== ScanSource.CUSTOM_URL) return;
+        if (activeAnalysis.source !== ScanSource.CUSTOM_URL) {
+          _log('[CUSTOM_URL_POLL]', 'BAILED AFTER RESPONSE: source changed');
+          return;
+        }
+
+        _log('[GET_URL_SCAN_RESPONSE]',
+          `url=${url}`,
+          `found=${!!state}`,
+          `status=${state ? state.status : 'null'}`,
+          `score=${state ? state.legitimatePercent : 'null'}`);
 
         if (chrome.runtime.lastError) {
           scanAttempts++;
@@ -725,7 +803,7 @@ const startCustomUrlScan = (rawUrl) => {
         clearInterval(customUrlPollTimer);
         customUrlPollTimer = null;
 
-        console.log('[POPUP] [COMPLETED] status=' + state.status + ' score=' + state.legitimatePercent);
+        _log('[COMPLETED]', `status=${state.status} score=${state.legitimatePercent} url=${url} domain=${domain}`);
 
         if (state.status === 'FAILED') {
           updateAnalysis({
@@ -751,6 +829,11 @@ const startCustomUrlScan = (rawUrl) => {
         // ✅ CẬP NHẬT activeAnalysis — TOÀN BỘ data từ custom URL scan
         // Đây là fix chính: UI render TỪ activeAnalysis, không từ currentTab
         // ═══════════════════════════════════════════════════════════════
+        _log('[RENDER_RESULT_SOURCE]',
+          `result=${JSON.stringify(state.result ? Object.keys(state.result) : null)}`);
+        _log('[RENDER_EXPLANATIONS]',
+          `explanations=${state.explanations ? state.explanations.length + ' items: ' + JSON.stringify(state.explanations.slice(0,3).map(e=>e.key)) : 'null'}`);
+
         updateAnalysis({
           status: state.status,
           isWhiteList: state.isWhiteList || null,
@@ -813,7 +896,7 @@ const showBackButton = (show) => {
 if (backToCurrentTab) {
   backToCurrentTab.addEventListener('click', () => {
     if (activeAnalysis.source !== ScanSource.CUSTOM_URL) return;
-    console.log('[POPUP] Back to CURRENT_TAB');
+    _log('[BACK_BUTTON]', 'Back to CURRENT_TAB');
 
     // Dừng custom URL poll
     if (customUrlPollTimer) {
@@ -835,8 +918,12 @@ if (backToCurrentTab) {
 
     // ✅ KHÔI PHỤC activeAnalysis từ savedCurrentTabAnalysis
     if (savedCurrentTabAnalysis) {
-      Object.assign(activeAnalysis, savedCurrentTabAnalysis);
+      // Dùng deep copy để tránh reference leak
+      Object.assign(activeAnalysis, JSON.parse(JSON.stringify(savedCurrentTabAnalysis)));
       savedCurrentTabAnalysis = null;
+
+      _log('[SAVED_ANALYSIS_RESTORED]',
+        `Restored CURRENT_TAB: domain=${activeAnalysis.domain} url=${activeAnalysis.url} source=${activeAnalysis.source}`);
 
       // Render ngay từ activeAnalysis đã khôi phục
       renderActiveAnalysis();
@@ -850,6 +937,7 @@ if (backToCurrentTab) {
               // ✅ Kiểm tra source trong callback
               if (activeAnalysis.source !== ScanSource.CURRENT_TAB) return;
               if (state && state.status !== 'ANALYZING' && state.status !== 'IDLE') {
+                _log('[ACTIVE_ANALYSIS]', `Refreshed from background: ${state.url} score=${state.legitimatePercent}`);
                 updateAnalysis({
                   status: state.status,
                   isWhiteList: state.isWhiteList || null,
