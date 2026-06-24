@@ -1,0 +1,13 @@
+{
+  "name": "@anti-scam/mobile",
+  "version": "1.7.0",
+  "private": true,
+  "description": "AntiScam React Native wrappers (AsyncStorage, fetch, network hooks)",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./storage": "./src/storage.js",
+    "./fetch-html": "./src/fetch-html.js"
+  },
+  "files": ["src/"]
+}

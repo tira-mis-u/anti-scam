@@ -4,6 +4,7 @@
   "version": "1.7.0",
   "description": "Browser Extension, Android App (React Native), Backend API",
   "workspaces": [
+    "packages/*",
     "backend",
     "apps/*"
   ],

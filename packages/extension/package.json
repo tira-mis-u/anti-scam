@@ -1,0 +1,13 @@
+{
+  "name": "@anti-scam/extension",
+  "version": "1.7.0",
+  "private": true,
+  "description": "AntiScam Chrome Extension specific wrappers (storage, tabs, runtime)",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./storage": "./src/storage.js",
+    "./scanner": "./src/scanner.js"
+  },
+  "files": ["src/"]
+}

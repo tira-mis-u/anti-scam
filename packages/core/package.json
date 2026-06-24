@@ -1,0 +1,18 @@
+{
+  "name": "@anti-scam/core",
+  "version": "1.7.0",
+  "private": true,
+  "description": "AntiScam shared pure logic — URL analysis, scoring, brand detection, HTML signal parsing",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./heuristic": "./src/heuristic.js",
+    "./signals": "./src/signals.js",
+    "./url": "./src/url.js",
+    "./brand": "./src/brand.js",
+    "./constants": "./src/constants.js"
+  },
+  "files": [
+    "src/"
+  ]
+}
