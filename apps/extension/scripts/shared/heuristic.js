@@ -328,593 +328,464 @@ const normalizeDomainAge = (domainAgeInput) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 5. PHÂN TÍCH URL → findings rủi ro
-//    Mỗi finding: { key, label, points, group, decays }
-//    decays=true → rủi ro "mềm", giảm dần theo thời gian ổn định
+// 3. V5 IDENTITY-FIRST SIGNAL PIPELINE
 // ═══════════════════════════════════════════════════════════════════════════
-const RISK_PTS = {
-  HOMOGLYPH: 30, TYPOSQUAT_1: 28, TYPOSQUAT_2: 18, BRAND_IN_DOMAIN: 14,
-  BRAND_IN_PATH: 8, BRAND_IMPERSONATION_STRONG: 26, BRAND_IMPERSONATION_WEAK: 10,
-  FORM_HIJACK: 26, OBFUSCATION: 18, SUSPICIOUS_EXT_IP: 16, SUSPICIOUS_EXT_DOMAIN: 7,
-  KEYLOGGER: 22, CLIPBOARD: 18, DOWNLOAD: 18, ARCHIVE_DOWNLOAD: 6, VN_SCAM_KW: 12, HIDDEN_IFRAME: 12,
-  REDIRECT_ABUSE: 20, PUNYCODE: 12, UNICODE_HOST: 12, IP_HOST: 10,
-  NO_HTTPS: 5, AT_SYMBOL: 3, LONG_URL: 3, SUSPICIOUS_TLD: 7,
-  NEW_DOMAIN_7: 16, NEW_DOMAIN_30: 10, MALWARE_REPUTATION: 45, DNS_RISK: 16,
-  COMMUNITY_REPORT: 22, JS_RISK: 18, SCAM_CONTENT: 16, HIDDEN_FORM: 14,
-  LINK_RISK: 18, DECEPTIVE_LINK: 16, PERMISSION_ABUSE: 16, OPEN_REDIRECT: 18,
-  META_REFRESH: 12, SCRIPT_REDIRECT: 14,
-};
 
+// ----------------------------------------------------------------------------
+// 3.1. IDENTITY ENGINE
+// Thu thập Identity Profile từ URL + Intel (không đánh giá rủi ro)
+// ----------------------------------------------------------------------------
+class IdentityEngine {
+  static buildProfile(urlObj, registrableDomain, intelData) {
+    const cert = intelData?.identityProfile?.certificate || null;
+    const asn  = intelData?.identityProfile?.asn  || null;
+    const ptr  = intelData?.identityProfile?.ptr  || [];
 
-const REDIRECT_PARAM_NAMES = ['url','u','redirect','redirect_url','redirect_uri','next','target','to','dest','destination','continue','return','return_url','returnUrl','callback','goto','r'];
-const findOpenRedirectTarget = (urlObj) => {
-  try {
-    const currentHost = getRegistrableDomain(urlObj.hostname);
-    for (const name of REDIRECT_PARAM_NAMES) {
-      const vals = urlObj.searchParams.getAll(name);
-      for (const val of vals) {
-        if (!val || val.length < 4) continue;
-        let decoded = val;
-        try { decoded = decodeURIComponent(val); } catch (_) {}
-        if (!/^https?:\/\//i.test(decoded) && !/^\/\//.test(decoded)) continue;
-        const target = new URL(decoded.startsWith('//') ? urlObj.protocol + decoded : decoded, urlObj.href);
-        const targetHost = getRegistrableDomain(target.hostname);
-        if (targetHost && currentHost && targetHost !== currentHost && !isTrustedHost(target.hostname)) return target.href;
-      }
-    }
-  } catch (_) {}
-  return null;
-};
+    const certIssuerOrg  = (cert?.status === 'success' && cert?.issuer)
+      ? (typeof cert.issuer === 'object' ? (cert.issuer.O || cert.issuer.CN || '') : String(cert.issuer))
+      : null;
+    const certSubjectOrg = (cert?.status === 'success' && cert?.organization)
+      ? cert.organization
+      : null;
+    const certSAN        = cert?.san || null;
 
-const analyzeUrl = (urlString) => {
-  const findings = [];
-  let matchedBrand = null;
-  if (!urlString || typeof urlString !== 'string' || !/^https?:\/\//i.test(urlString)) {
-    return { findings, matchedBrand: null };
+    return {
+      hostname:         urlObj.hostname,
+      rootDomain:       registrableDomain,
+      protocol:         urlObj.protocol,
+      certIssuerOrg,
+      certSubjectOrg,
+      certSAN,
+      certValid:        cert?.status === 'success',
+      asnNumber:        asn?.asn   || null,
+      asnOrg:           asn?.org   || null,
+      asnIsp:           asn?.isp   || null,
+      ptr,
+    };
   }
-  let url;
-  try { url = new URL(urlString); } catch (_) { return { findings, matchedBrand: null }; }
+}
 
-  const hostname = url.hostname.toLowerCase();
-  const unicodeHostname = toUnicodeDomain(hostname).toLowerCase();
-  const registrable = getRegistrableDomain(hostname);
-  const unicodeRegistrable = toUnicodeDomain(registrable).toLowerCase();
-  const sld = unicodeRegistrable.split('.')[0] || unicodeHostname.replace(/^www\./, '').split('.')[0];
-  const hostNoWww = unicodeHostname.replace(/^www\./, '');
-  const asciiHostNoWww = hostname.replace(/^www\./, '');
-  const pathLower = url.pathname.toLowerCase();
-  const fullLower = urlString.toLowerCase();
-  const add = (key, label, points, group, decays = true) => findings.push({ key, label, points, group, decays });
+// ----------------------------------------------------------------------------
+// 3.2. DOMAIN RELATIONSHIP ENGINE (V5)
+// Xác định Ownership Confidence qua hạ tầng kỹ thuật, không so sánh tên
+// ----------------------------------------------------------------------------
+class DomainRelationshipEngine {
+  /**
+   * Xác định Ownership thông qua 3 tầng:
+   *   1. Khớp tên miền chính thức (BRANDS.official)
+   *   2. Phân tích tính nhất quán hạ tầng (Cert/ASN)
+   *   3. Kết hợp với DOM signal (brandInContent)
+   * @returns {{ ownershipConfidence: 'HIGH'|'MEDIUM'|'LOW', brandDetected: string|null, isBrandOwner: boolean, ownershipStatus: string }}
+   */
+  static verifyOwnership(urlObj, identityProfile, domSignals) {
+    let ownershipConfidence = 'LOW';
+    let brandDetected = null;
+    let isBrandOwner = false;
 
-  // Punycode / Unicode
-  if (hostname.includes('xn--')) add('Punycode', 'Tên miền có dấu hiệu giả mạo ký tự.', RISK_PTS.PUNYCODE, 'punycode', false);
-  if (hasSuspiciousUnicode(unicodeHostname)) add('UnicodeHost', 'Tên miền có dấu hiệu giả mạo ký tự.', RISK_PTS.UNICODE_HOST, 'punycode', false);
-
-  // Brand mimic (homograph / typosquat / brand-in-domain)
-  const isOfficial = (b) => b.official.some(od => asciiHostNoWww === od || asciiHostNoWww.endsWith('.' + od) || hostNoWww === od || hostNoWww.endsWith('.' + od));
-  const candidates = new Set([sld, hostNoWww, asciiHostNoWww]);
-  hostNoWww.split('.').forEach(p => { if (p && p.length >= 3) candidates.add(p); });
-  asciiHostNoWww.split('.').forEach(p => { if (p && p.length >= 3) candidates.add(p); });
-  let brandFound = false;
-  for (const token of candidates) {
-    if (!token || token.length < 3 || brandFound) continue;
-    const deh = dehomoglyph(token);
+    // Bước 1: Khớp tên miền chính thức
     for (const b of BRANDS) {
-      if (isOfficial(b)) continue;
-      if (b.keys.some(bk => deh === bk) && !b.keys.includes(token)) {
-        matchedBrand = b.name;
-        add('Homograph', 'Tên miền có dấu hiệu giả mạo ký tự.', RISK_PTS.HOMOGLYPH, 'brand', false);
-        brandFound = true; break;
-      }
-    }
-    if (brandFound) break;
-    for (const b of BRANDS) {
-      if (isOfficial(b)) continue;
-      for (const bk of b.keys) {
-        if (bk.length < 5) continue;
-        if (token.length < Math.max(4, bk.length - 2)) continue;
-        const dehToken = dehomoglyph(token);
-        const d = levenshtein(dehToken, bk);
-        const jw = jaroWinkler(dehToken, bk);
-        if ((d === 1 || d === 2) || (jw >= 0.92 && dehToken !== bk && Math.abs(dehToken.length - bk.length) <= 3)) {
-          matchedBrand = matchedBrand || b.name;
-          add('Typosquat', 'Tên miền có dấu hiệu giả mạo thương hiệu.', d === 1 || jw >= 0.96 ? RISK_PTS.TYPOSQUAT_1 : RISK_PTS.TYPOSQUAT_2, 'brand', false);
-          brandFound = true; break;
-        }
-      }
-      if (brandFound) break;
-    }
-    if (brandFound) break;
-  }
-  if (!brandFound) {
-    for (const b of BRANDS) {
-      if (isOfficial(b)) continue;
-      let hit = false;
-      for (const bk of b.keys) {
-        if (bk.length < 5 && !SHORT_BRAND_KEYS.has(bk)) continue;
-        const re = new RegExp(`(^|[-_.0-9])${bk}([-_.0-9]|$)`);
-        if (re.test(hostNoWww) || sld.includes(bk)) { hit = true; break; }
-      }
-      if (hit) {
-        matchedBrand = matchedBrand || b.name;
-        add('BrandInDomain', 'Tên miền có dấu hiệu giả mạo thương hiệu.', RISK_PTS.BRAND_IN_DOMAIN, 'brand', false);
+      if (b.official.some(od =>
+        identityProfile.rootDomain === od ||
+        identityProfile.rootDomain.endsWith('.' + od)
+      )) {
+        ownershipConfidence = 'HIGH';
+        brandDetected = b.name;
+        isBrandOwner = true;
         break;
       }
     }
-  }
-  // Brand in path
-  if (!matchedBrand) {
-    for (const b of BRANDS) {
-      for (const bk of b.keys) {
-        if (bk.length < 5 && !SHORT_BRAND_KEYS.has(bk)) continue;
-        if (pathLower.includes(bk) && !isOfficial(b)) {
-          add('BrandInPath', `Đường dẫn nhắc đến thương hiệu ${b.name}`, RISK_PTS.BRAND_IN_PATH, 'brand-path', true);
-          matchedBrand = matchedBrand || b.name; break;
-        }
+
+    // Bước 2: Kiểm tra tính nhất quán hạ tầng (khi DOM báo có thương hiệu)
+    if (!isBrandOwner && domSignals.brandInContent) {
+      brandDetected = 'unknown_brand';
+      // Nếu Cert có Subject Org → cố gắng đối chiếu
+      if (identityProfile.certSubjectOrg) {
+        ownershipConfidence = 'MEDIUM'; // Có Cert org, nhưng không khớp domain chính thức
       }
     }
+
+    const ownershipStatus = isBrandOwner
+      ? 'VERIFIED'
+      : (!isBrandOwner && brandDetected)
+        ? 'MISMATCH'
+        : 'UNKNOWN';
+
+    return { ownershipConfidence, brandDetected, isBrandOwner, ownershipStatus };
   }
+}
 
-  // Misc yếu tố nhẹ
-  if (fullLower.includes('@')) add('AtSymbol', 'URL chứa ký tự @', RISK_PTS.AT_SYMBOL, 'misc', true);
-  const ipRe = /^(\d{1,3}\.){3}\d{1,3}$/;
-  if (ipRe.test(hostNoWww)) add('IPHost', 'Truy cập bằng địa chỉ IP', RISK_PTS.IP_HOST, 'misc', true);
-  if (urlString.length > 100) add('LongURL', 'Đường dẫn quá dài', RISK_PTS.LONG_URL, 'misc', true);
-  if (['.xyz', '.tk', '.ml', '.ga', '.cf', '.click', '.top', '.country', '.kim', '.review', '.work', '.date', '.racing', '.stream'].some(t => hostname.endsWith(t)))
-    add('SuspiciousTLD', 'Đuôi tên miền dễ bị lạm dụng', RISK_PTS.SUSPICIOUS_TLD, 'misc', true);
-  if (url.protocol !== 'https:') add('NoHTTPS', 'Không dùng HTTPS', RISK_PTS.NO_HTTPS, 'misc', true);
-  const openRedirectTarget = findOpenRedirectTarget(url);
-  if (openRedirectTarget) add('OpenRedirect', 'URL có tham số chuyển hướng sang tên miền khác.', RISK_PTS.OPEN_REDIRECT, 'redirect', false);
+// ----------------------------------------------------------------------------
+// 3.3. CONTEXT CLASSIFICATION ENGINE (V5)
+// Phân loại mục đích trang web dựa trên hạ tầng + DOM
+// KHÔNG tăng Risk — chỉ cung cấp Context cho Decision
+// ----------------------------------------------------------------------------
+class ContextEngine {
+  static classify(identityProfile, domSignals) {
+    const ctx = {
+      isAuthPortal:       false,  // Có yêu cầu đăng nhập
+      isGovernmentOrEdu:  false,  // Hạ tầng .gov / .edu
+      isCloudHosted:      false,  // Chạy trên nền tảng đám mây
+      isSaas:             false,  // SaaS nền tảng (Vercel, Netlify…)
+      hasLoginForm:       false,  // DOM phát hiện form đăng nhập
+      classification:     'UNKNOWN',
+    };
 
-  // Từ khoá lừa đảo VN
-  let vnHits = 0;
-  for (const kw of VN_SCAM_KEYWORDS) if (fullLower.includes(kw)) vnHits++;
-  if (vnHits > 0) add('VNScamKeyword', `URL chứa ${vnHits} từ khoá thường thấy trong trang lừa đảo`, Math.min(RISK_PTS.VN_SCAM_KW + (vnHits - 1) * 4, 20), 'vn-scam', true);
-
-  // File tải xuống nguy hiểm
-  const fileName = decodeURIComponent((pathLower.split('/').pop() || '').split('?')[0].split('#')[0]);
-  if (DOUBLE_EXT_RE.test(fileName)) {
-    add('DangerousDownload', 'Tên file tải xuống có đuôi kép đáng ngờ.', RISK_PTS.DOWNLOAD + 8, 'download', false);
-  } else {
-    for (const ext of EXECUTABLE_EXTS) {
-      if (pathLower.endsWith(ext) || pathLower.includes(ext + '?') || pathLower.includes(ext + '#')) {
-        add('DangerousDownload', `Trang yêu cầu tải file ${ext.toUpperCase()} nguy hiểm`, RISK_PTS.DOWNLOAD, 'download', false);
-        break;
-      }
+    // Auth portal (Informational — không phải cáo buộc)
+    if (domSignals.passwordField || domSignals.otpField || (domSignals.sensitiveForms > 0)) {
+      ctx.isAuthPortal = true;
+      ctx.hasLoginForm = true;
     }
-  }
-  if (!findings.some(f => f.key === 'DangerousDownload')) {
-    for (const ext of ARCHIVE_EXTS) {
-      if (pathLower.endsWith(ext) || pathLower.includes(ext + '?') || pathLower.includes(ext + '#')) {
-        add('ArchiveDownload', `URL tải file nén ${ext.toUpperCase()}`, RISK_PTS.ARCHIVE_DOWNLOAD, 'download', true);
-        break;
-      }
+
+    // Gov / Edu (qua tên miền)
+    const rd = identityProfile.rootDomain;
+    if (rd.endsWith('.gov.vn') || rd.endsWith('.gov') || rd.endsWith('.edu.vn') || rd.endsWith('.edu') || rd.endsWith('.ac.uk')) {
+      ctx.isGovernmentOrEdu = true;
     }
-  }
-  return { findings, matchedBrand };
-};
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 6. PHÂN TÍCH REDIRECT CHAIN
-// ═══════════════════════════════════════════════════════════════════════════
-const analyzeRedirectChain = (chain) => {
-  if (!chain || !Array.isArray(chain) || chain.length <= 1) {
-    return { points: 0, hops: 0, distinctDomains: 0, label: null, openRedirects: [] };
-  }
-  const hosts = [];
-  const openRedirects = [];
-  for (const u of chain) {
-    try {
-      const obj = new URL(u);
-      hosts.push(getRegistrableDomain(obj.hostname));
-      const target = findOpenRedirectTarget(obj);
-      if (target) openRedirects.push({ from: u, to: target });
-    } catch (_) {}
-  }
-  const distinct = [...new Set(hosts.filter(Boolean))];
-  const hops = chain.length - 1;
-  let points = 0;
-  if (hops > 2) points += 10;
-  if (hops > 4) points += 10;
-  if (distinct.length > 2) points += 12;
-  if (distinct.length > 3) points += 8;
-  if (openRedirects.length) points += RISK_PTS.OPEN_REDIRECT;
-  // origin khác final
-  if (distinct.length >= 2 && hosts[0] && hosts[hosts.length - 1] && hosts[0] !== hosts[hosts.length - 1]) points += 5;
-  points = Math.min(points, 40);
-  let label = null;
-  if (openRedirects.length) label = 'Chuỗi chuyển hướng có dấu hiệu open redirect sang tên miền khác.';
-  else if (points > 0) label = 'Website chuyển hướng qua nhiều miền khác nhau.';
-  return { points, hops, distinctDomains: distinct.length, label, openRedirects };
-};
+    // Cloud/SaaS nền tảng
+    const saasHosts = ['vercel.app', 'netlify.app', 'herokuapp.com', 'onrender.com', 'pages.dev', 'github.io', 'firebaseapp.com', 'azurewebsites.net', 'amplifyapp.com'];
+    if (saasHosts.some(h => rd.endsWith(h))) {
+      ctx.isCloudHosted = true;
+      ctx.isSaas = true;
+    }
 
-const getTrustContext = (urlString, rep, domainAgeDays) => {
-  let host = '', registrable = '';
-  try { host = new URL(urlString).hostname; registrable = getRegistrableDomain(host); } catch (_) {}
-  const https = /^https:/i.test(urlString || '');
-  const knownGood = !!(rep.inWhitelist || rep.isOfficialBrand || REPUTATION_WHITELIST.has(registrable));
-  const confirmedDanger = !!(rep.inBlacklist || (rep.malware && rep.malware.dangerous));
-  if (confirmedDanger) return 'LOW_TRUST';
-  if (knownGood) return 'HIGH_TRUST';
-  if (https && domainAgeDays > 365) return 'MEDIUM_TRUST';
-  if (https && domainAgeDays > 90 && rep.checked) return 'MEDIUM_TRUST';
-  return 'LOW_TRUST';
-};
+    // Classification label (informational)
+    if (ctx.isGovernmentOrEdu)   ctx.classification = 'GOVERNMENT_EDU';
+    else if (ctx.isSaas)         ctx.classification = 'SAAS_CLOUD';
+    else if (ctx.isAuthPortal)   ctx.classification = 'AUTHENTICATION_PORTAL';
+    else                         ctx.classification = 'GENERAL';
 
-const FINDING_CONFIDENCE = {
-  MalwareReputation: 0.99, CommunityReport: 0.92, RedirectBadHop: 0.95,
-  Homograph: 0.9, Typosquat: 0.88, BrandInDomain: 0.82, BrandImpersonation: 0.85,
-  FormHijack: 0.9, FormDest: 0.88, Keylogger: 0.86, DataExfil: 0.9,
-  DangerousDownload: 0.9, OpenRedirect: 0.82, RedirectChain: 0.45,
-  NewDomain: 0.55, PermissionAbuse: 0.35, SuspiciousLinks: 0.45, DeceptiveLinks: 0.55,
-  ObfuscatedScript: 0.45, JavaScriptRisk: 0.35, SuspiciousExternal: 0.25,
-  iFrames: 0.15, ArchiveDownload: 0.2, ScamContent: 0.45,
-  MetaRefreshRedirect: 0.35, ScriptRedirect: 0.4,
-  NoHTTPS: 0.2, AtSymbol: 0.2, LongURL: 0.15, SuspiciousTLD: 0.2, IPHost: 0.45,
-};
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 7. ENGINE CHÍNH — computeScore
-// ═══════════════════════════════════════════════════════════════════════════
-const computeScore = (urlString, context = {}) => {
-  const ctx = context || {};
-  const dom = ctx.dom || {};
-  const domainAgeInfo = normalizeDomainAge(ctx.domainAge || ctx.domainAgeDetails || ctx.domainAgeDays);
-  const domainAgeDays = domainAgeInfo.ageDays != null ? domainAgeInfo.ageDays : -1;
-  const rep = ctx.reputation || { checked: false };
-  const trustContext = getTrustContext(urlString, rep, domainAgeDays);
-  const redirectChain = ctx.redirectChain || [];
-  const stabilityMs = ctx.stabilityMs || 0;
-
-  const urlPart = analyzeUrl(urlString);
-  const findings = urlPart.findings.slice();
-  const matchedBrand = urlPart.matchedBrand || dom.matchedBrand;
-
-  if (domainAgeDays >= 0 && domainAgeDays < 7) {
-    findings.push({ key: 'NewDomain', label: 'Website mới được đăng ký gần đây.', points: RISK_PTS.NEW_DOMAIN_7, group: 'domain', decays: false });
-  } else if (domainAgeDays >= 0 && domainAgeDays < 30) {
-    findings.push({ key: 'NewDomain', label: 'Website mới được đăng ký gần đây.', points: RISK_PTS.NEW_DOMAIN_30, group: 'domain', decays: false });
+    return ctx;
   }
 
-  const malwareSources = rep.malware && Array.isArray(rep.malware.sources) ? rep.malware.sources.length :
-    (rep.malware && rep.malware.maliciousSources ? rep.malware.maliciousSources : 0);
-  if (rep.malware && (rep.malware.dangerous || malwareSources > 0)) {
-    findings.push({ key: 'MalwareReputation', label: 'Bị nhiều nguồn cảnh báo nguy hiểm.', points: Math.min(70, RISK_PTS.MALWARE_REPUTATION + Math.max(0, malwareSources - 1) * 8), group: 'reputation', decays: false });
+  // Backward compat alias
+  static analyze(domSignals, urlObj, registrableDomain) {
+    const fakeProfile = { rootDomain: registrableDomain };
+    const result = this.classify(fakeProfile, domSignals);
+    // Map to old field names
+    return {
+      isLoginPortal:     result.isAuthPortal,
+      isGovernmentOrEdu: result.isGovernmentOrEdu,
+      isCloudHosted:     result.isCloudHosted,
+      ...result,
+    };
   }
-  if (rep.dns && rep.dns.riskyInfrastructure) {
-    findings.push({ key: 'DNSRisk', label: 'Hạ tầng DNS/hosting có lịch sử rủi ro.', points: RISK_PTS.DNS_RISK, group: 'dns', decays: false });
+}
+
+// ----------------------------------------------------------------------------
+// 3.4. EVIDENCE ENGINE (V5)
+// Mọi tín hiệu phải được phân loại đúng mức độ.
+// Password/OTP/Login là INFORMATIONAL — không được tăng Risk.
+// Brand Impersonation chỉ kích hoạt khi: Brand + Ownership Mismatch + Auth + Behavior.
+// ----------------------------------------------------------------------------
+class EvidenceEngine {
+  static collect(urlObj, identityProfile, domSignals, context, ownership, rep, domainAgeDays) {
+    const evidence = [];
+    const addEv = (id, severity, reason) => evidence.push({ id, severity, reason });
+
+    // ── CRITICAL ─────────────────────────────────────────────────────────────
+    if (rep.inBlacklist) {
+      addEv('BLACKLIST', 'CRITICAL', 'Tên miền nằm trong danh sách đen lừa đảo đã xác nhận.');
+    }
+    if (rep.malware?.dangerous) {
+      addEv('MALWARE', 'CRITICAL', 'Tên miền bị cảnh báo phân phối mã độc bởi nhiều nguồn.');
+    }
+
+    // ── STRONG (Hành vi tấn công rõ ràng) ────────────────────────────────────
+    if (domSignals.formHijack) {
+      addEv('FORM_HIJACK', 'STRONG', 'Biểu mẫu đăng nhập bị can thiệp và gửi dữ liệu tới máy chủ bên thứ ba.');
+    }
+    if (domSignals.maliciousJs) {
+      addEv('MALICIOUS_JS', 'STRONG', 'Mã JavaScript theo dõi bàn phím hoặc can thiệp clipboard.');
+    }
+    if (domSignals.doubleExtension) {
+      addEv('DOUBLE_EXT', 'STRONG', 'Tệp tải xuống có phần mở rộng kép giả mạo (.pdf.exe).');
+    }
+
+    // ── MEDIUM (Kết hợp bằng chứng) ──────────────────────────────────────────
+    // Brand Impersonation: chỉ kích hoạt khi ĐỦ 3 điều kiện đồng thời
+    if (
+      ownership.brandDetected &&
+      ownership.ownershipStatus === 'MISMATCH' &&
+      context.isAuthPortal &&
+      (domSignals.scamKeywords || domSignals.formHijack || domSignals.maliciousJs)
+    ) {
+      addEv('BRAND_IMPERSONATION', 'MEDIUM',
+        `Mạo danh thương hiệu: Trang yêu cầu đăng nhập có giao diện giống ${ownership.brandDetected} nhưng không thuộc hạ tầng của họ và có hành vi đáng ngờ.`);
+    }
+
+    if (domSignals.scamKeywords) {
+      addEv('SCAM_KEYWORDS', 'MEDIUM', 'Nội dung trang chứa nhiều từ khóa lừa đảo phổ biến.');
+    }
+    if ((domSignals.redirectHops || 0) > 2) {
+      addEv('REDIRECT_CHAIN', 'MEDIUM', 'Trang web chuyển hướng qua nhiều trạm trung gian.');
+    }
+
+    // ── WEAK (Tín hiệu kỹ thuật đơn lẻ) ──────────────────────────────────────
+    if (domainAgeDays >= 0 && domainAgeDays <= 14) {
+      addEv('NEW_DOMAIN', 'WEAK', 'Tên miền mới được đăng ký trong vòng 14 ngày.');
+    }
+    if (urlObj.protocol !== 'https:' && !domSignals.hasHttps) {
+      addEv('NO_HTTPS', 'WEAK', 'Trang web không sử dụng kết nối bảo mật HTTPS.');
+    }
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(urlObj.hostname)) {
+      addEv('IP_HOST', 'WEAK', 'Truy cập trực tiếp bằng địa chỉ IP thay vì tên miền.');
+    }
+
+    // ── INFORMATIONAL (Không tăng Risk) ──────────────────────────────────────
+    if (context.isAuthPortal)     addEv('LOGIN_CONTEXT',  'INFORMATIONAL', 'Trang web yêu cầu xác thực người dùng.');
+    if (identityProfile.certValid) addEv('CERT_VALID',    'INFORMATIONAL', 'Chứng chỉ SSL/TLS hợp lệ và đang hoạt động.');
+
+    return evidence;
   }
-  const reportCount = rep.communityReports || (rep.community && rep.community.count) || 0;
-  if (reportCount >= 3) {
-    findings.push({ key: 'CommunityReport', label: 'Website đã bị cộng đồng báo cáo nhiều lần.', points: RISK_PTS.COMMUNITY_REPORT + Math.min(12, reportCount), group: 'community', decays: false });
+}
+
+// ----------------------------------------------------------------------------
+// 3.5. TRUST ENGINE (V5)
+// Trust độc lập với Risk. Dựa trên Ownership Consistency + Reputation.
+// ----------------------------------------------------------------------------
+class TrustEngine {
+  static analyze(identityProfile, context, ownership, rep, domainAgeDays) {
+    let trustScore = 0;
+    const sources = [];
+
+    // Ownership đã xác minh = Trust cao nhất
+    if (ownership.ownershipConfidence === 'HIGH') {
+      trustScore += 80;
+      sources.push('OFFICIAL_BRAND');
+    }
+
+    // Whitelist nội bộ
+    if (REPUTATION_WHITELIST.has(identityProfile.rootDomain) || rep.inWhitelist) {
+      trustScore += 60;
+      sources.push('WHITELIST');
+    }
+
+    // Cơ quan nhà nước / giáo dục
+    if (context.isGovernmentOrEdu) {
+      trustScore += 55;
+      sources.push('GOV_EDU');
+    }
+
+    // Cert hợp lệ từ CA uy tín (thêm điểm nhỏ)
+    if (identityProfile.certValid) {
+      trustScore += 10;
+      sources.push('CERT_VALID');
+    }
+
+    // Domain lâu năm
+    if (domainAgeDays > 365) {
+      trustScore += 30;
+      sources.push('AGE_OLD');
+    } else if (domainAgeDays > 90) {
+      trustScore += 10;
+      sources.push('AGE_MATURE');
+    }
+
+    // Nền tảng SaaS/Cloud được biết đến
+    if (context.isCloudHosted || context.isSaas) {
+      trustScore += 20;
+      sources.push('CLOUD_HOSTED');
+    }
+
+    // Backward compat alias
+    static_analyze_compat: {
+      void 0; // no-op label block
+    }
+
+    return { trustScore: Math.min(trustScore, 100), sources };
   }
 
-  // ── 7.1 DOM findings ──────────────────────────────────────────────────────
-  // BRAND IMPERSONATION qua nhiều bề mặt (title/favicon/logo/h1/h2/meta)
-  if (dom.brandInContent && !rep.isOfficialBrand && !rep.inWhitelist) {
-    const surfaces = dom.brandSurfaces || 1;
-    const strong = surfaces >= 2;
-    const lbl = matchedBrand
-      ? `Trang dùng logo/tiêu đề thương hiệu ${matchedBrand} nhưng tên miền không chính thức`
-      : 'Trang hiển thị thương hiệu quen thuộc nhưng tên miền không chính thức';
-    findings.push({ key: 'BrandImpersonation', label: lbl,
-      points: strong ? RISK_PTS.BRAND_IMPERSONATION_STRONG : RISK_PTS.BRAND_IMPERSONATION_WEAK,
-      group: 'brand', decays: false });
+  // Backward compat wrapper
+  static analyzeCompat(urlObj, registrableDomain, context, relationship, rep, domainAgeDays) {
+    const fakeProfile = { rootDomain: registrableDomain, certValid: false };
+    const fakeOwnership = { ownershipConfidence: relationship.isBrandOwner ? 'HIGH' : 'LOW' };
+    return this.analyze(fakeProfile, context, fakeOwnership, rep, domainAgeDays);
   }
-  if (dom.formHijack) findings.push({ key: 'FormHijack', label: 'Biểu mẫu gửi thông tin sang một tên miền khác lạ', points: RISK_PTS.FORM_HIJACK, group: 'form', decays: false });
-  if (dom.obfuscatedScript) findings.push({ key: 'ObfuscatedScript', label: 'Trang web chứa mã JavaScript đáng ngờ.', points: RISK_PTS.OBFUSCATION, group: 'obfuscation', decays: false });
-  if (dom.jsRiskScore >= 35 && !dom.obfuscatedScript) findings.push({ key: 'JavaScriptRisk', label: 'Trang web chứa mã JavaScript đáng ngờ.', points: RISK_PTS.JS_RISK, group: 'obfuscation', decays: false });
-  if (dom.suspiciousExternalScript) findings.push({ key: 'SuspiciousExternal', label: 'Tải mã từ nguồn không phổ biến / địa chỉ IP', points: RISK_PTS.SUSPICIOUS_EXT_IP, group: 'external', decays: false });
-  if (dom.keylogger) findings.push({ key: 'Keylogger', label: 'Có dấu hiệu theo dõi thao tác gõ phím', points: RISK_PTS.KEYLOGGER, group: 'malware', decays: false });
-  if (dom.clipboardHijack) findings.push({ key: 'ClipboardHijack', label: 'Có dấu hiệu can thiệp bộ nhớ tạm (clipboard)', points: RISK_PTS.CLIPBOARD, group: 'malware', decays: false });
-  if (dom.downloadFile) findings.push({ key: 'DangerousDownload', label: 'Trang yêu cầu tải file có thể gây hại.', points: RISK_PTS.DOWNLOAD, group: 'download', decays: false });
-  if (dom.archiveDownload && !rep.inWhitelist && !rep.isOfficialBrand) findings.push({ key: 'ArchiveDownload', label: 'Trang có liên kết tải file nén; cần thận trọng nếu nguồn không quen thuộc.', points: RISK_PTS.ARCHIVE_DOWNLOAD, group: 'download', decays: true });
-  if (dom.suspiciousLinkCount > 0 && !rep.inWhitelist && !rep.isOfficialBrand) findings.push({ key: 'SuspiciousLinks', label: `Trang chứa ${dom.suspiciousLinkCount} liên kết có dấu hiệu nguy hiểm hoặc lừa đảo.`, points: Math.min(32, RISK_PTS.LINK_RISK + (dom.suspiciousLinkCount - 1) * 3), group: 'links', decays: false });
-  if (dom.deceptiveLinkCount > 0 && !rep.inWhitelist && !rep.isOfficialBrand) findings.push({ key: 'DeceptiveLinks', label: `Trang có ${dom.deceptiveLinkCount} liên kết hiển thị một miền nhưng trỏ sang miền khác.`, points: Math.min(28, RISK_PTS.DECEPTIVE_LINK + (dom.deceptiveLinkCount - 1) * 2), group: 'links', decays: false });
-  if (dom.metaRefreshRedirect) findings.push({ key: 'MetaRefreshRedirect', label: 'Trang dùng meta refresh để chuyển hướng sang tên miền khác.', points: RISK_PTS.META_REFRESH, group: 'redirect', decays: true });
-  if (dom.scriptRedirect) findings.push({ key: 'ScriptRedirect', label: 'Trang có mã JavaScript chuyển hướng sang URL ngoài.', points: RISK_PTS.SCRIPT_REDIRECT, group: 'redirect', decays: true });
-  if (dom.permissionAbuse && !rep.inWhitelist && !rep.isOfficialBrand) {
-    const reqs = Array.isArray(dom.permissionRequests) ? dom.permissionRequests.join(', ') : 'quyền nhạy cảm';
-    const strongReqs = (dom.permissionRequests || []).filter(x => !String(x).startsWith('permissions-'));
-    const pts = strongReqs.length ? RISK_PTS.PERMISSION_ABUSE + Math.max(0, strongReqs.length - 1) * 3 : 6;
-    findings.push({ key: 'PermissionAbuse', label: `Trang gọi hoặc yêu cầu quyền nhạy cảm: ${reqs}.`, points: Math.min(30, pts), group: 'permission', decays: false });
-  }
-  if (dom.redirectBadHop) findings.push({ key: 'RedirectBadHop', label: 'Chuỗi chuyển hướng đi qua URL nằm trong danh sách cảnh báo.', points: RISK_PTS.COMMUNITY_REPORT, group: 'redirect', decays: false });
-  if (dom.hiddenForm && (dom.sensitiveForm || dom.passwordField || dom.otpField) && !rep.inWhitelist && !rep.isOfficialBrand) findings.push({ key: 'HiddenForm', label: 'Trang có biểu mẫu nhạy cảm bị ẩn.', points: RISK_PTS.HIDDEN_FORM, group: 'form', decays: false });
-  if (dom.scamContentRisk >= 2 && !rep.inWhitelist && !rep.isOfficialBrand) findings.push({ key: 'ScamContent', label: 'Nội dung có dấu hiệu kêu gọi lừa đảo.', points: Math.min(28, RISK_PTS.SCAM_CONTENT + (dom.scamContentRisk - 2) * 4), group: 'content', decays: true });
-  // IFRAME — dùng Iframe Risk Score chi tiết từ features.js
-  if (dom.iframeRiskScore > 0 && !rep.inWhitelist && !rep.isOfficialBrand) {
-    const detail = dom.iframeDetails && dom.iframeDetails[0];
-    const lbl = detail
-      ? `Khung trang (iFrame) đáng ngờ: ${detail.reasons.join(', ')}`
-      : 'Phát hiện khung trang ẩn (iFrame vô hình)';
-    // Map điểm iframe → risk points (cap 35)
-    const pts = Math.min(Math.round(dom.iframeRiskScore * 0.5), 35);
-    findings.push({ key: 'iFrames', label: lbl, points: pts, group: 'malware', decays: false });
-  }
-  // Network: upload dữ liệu ra domain lạ
-  if (dom.networkUploadToExternal && !rep.inWhitelist && !rep.isOfficialBrand) findings.push({ key: 'DataExfil', label: 'Có dấu hiệu gửi dữ liệu ra tên miền lạ', points: RISK_PTS.KEYLOGGER, group: 'malware', decays: false });
-  // FORM DESTINATION ENGINE (V3): endpoint thực tế nhận dữ liệu form
-  if (dom.hasUntrustedFormDest && (dom.sensitiveForm || dom.passwordField || dom.otpField) && !rep.inWhitelist && !rep.isOfficialBrand) {
-    const dests = dom.formDestinations || [];
-    findings.push({ key: 'FormDest', label: `Biểu mẫu gửi dữ liệu đến ${dests.length > 1 ? dests.length + ' tên miền lạ' : 'tên miền lạ'}`, points: RISK_PTS.FORM_HIJACK, group: 'form', decays: false });
-  }
+}
 
-  // Redirect chain
-  const rc = analyzeRedirectChain(redirectChain);
-  if (rc.points > 0 && rc.label) {
-    findings.push({ key: rc.openRedirects && rc.openRedirects.length ? 'OpenRedirect' : 'RedirectChain', label: rc.label, points: rc.points, group: 'redirect', decays: true });
-  }
-
-  // SFH — hành vi submit form
-  //   '0' (vàng): form không có action / action="#" 
-  //     → RẤT phổ biến ở SPA (React/Vue/Angular xử lý submit bằng JS)
-  //     → KHÔNG phạt nếu không có form nhạy cảm (gần như false positive)
-  //     → Chỉ phạt nhẹ khi đi kèm password/OTP
-  //   '1' (đỏ) : form gửi cross-domain → FormHijack đã xử lý
-  if (dom.sfh === '0' && (dom.sensitiveForm || dom.passwordField || dom.otpField)) {
-    findings.push({
-      key: 'SFH',
-      label: 'Biểu mẫu nhập liệu không chỉ rõ nơi nhận dữ liệu',
-      points: 8, group: 'form', decays: true,
+// ----------------------------------------------------------------------------
+// 5. DECISION ENGINE
+// Đưa ra quyết định cuối cùng dựa trên Sự kết hợp Evidence + Trust + Context
+// ----------------------------------------------------------------------------
+class DecisionEngine {
+  static decide(evidence, trustAnalysis, context) {
+    let riskScore = 0;
+    
+    // Đếm mức độ bằng chứng
+    let critCount = 0, strongCount = 0, medCount = 0, weakCount = 0;
+    evidence.forEach(e => {
+      if (e.severity === 'CRITICAL') critCount++;
+      else if (e.severity === 'STRONG') strongCount++;
+      else if (e.severity === 'MEDIUM') medCount++;
+      else if (e.severity === 'WEAK') weakCount++;
     });
-  }
 
-  // ── Reputation override / tier normalization ─────────────────────────────
-  // Website uy tín/official không bị kéo điểm sâu bởi tín hiệu yếu như CDN, iframe,
-  // analytics, permission query, nhiều JS, link ngoài... Chỉ Tier A/B thật sự mạnh mới tác động lớn.
-  const isReputableSite = trustContext === 'HIGH_TRUST';
-  const confirmedDanger = !!(rep.inBlacklist || (rep.malware && rep.malware.dangerous));
-  const TIER_A = new Set(['MalwareReputation', 'CommunityReport', 'RedirectBadHop']);
-  const TIER_B = new Set(['BrandImpersonation', 'Homograph', 'Typosquat', 'BrandInDomain', 'FormHijack', 'FormDest', 'DangerousDownload', 'Keylogger', 'DataExfil', 'OpenRedirect']);
-  for (const f of findings) {
-    f.baseWeight = f.points || 0;
-    f.tier = TIER_A.has(f.key) ? 'A' : (TIER_B.has(f.key) ? 'B' : 'C');
-    f.confidence = FINDING_CONFIDENCE[f.key] != null ? FINDING_CONFIDENCE[f.key] : (f.tier === 'A' ? 0.95 : (f.tier === 'B' ? 0.75 : 0.2));
-    f.riskContribution = f.baseWeight * f.confidence;
-    f.points = f.riskContribution;
-    if (trustContext === 'HIGH_TRUST' && !confirmedDanger && f.tier === 'C') {
-      f.points *= 0.2; // 20% trọng số gốc cho heuristic yếu trên site high trust
-      f.decays = true;
-    } else if (trustContext === 'MEDIUM_TRUST' && !confirmedDanger && f.tier === 'C') {
-      f.points *= 0.5;
-      f.decays = true;
+    const isHighTrust = trustAnalysis.trustScore >= 50;
+
+    // RULE 1: CRITICAL -> Auto Block
+    if (critCount > 0) {
+      return { riskScore: 100, isPhish: true, riskLevel: 'critical', summary: 'Phát hiện bằng chứng lừa đảo hoặc nguy hiểm mã độc nghiêm trọng.' };
     }
-    if (isReputableSite && !confirmedDanger && ['ArchiveDownload', 'PermissionAbuse', 'SuspiciousExternal', 'JavaScriptRisk', 'ObfuscatedScript', 'iFrames'].includes(f.key)) {
-      f.points = 0;
+
+    // RULE 2: STRONG Evidence -> Rất nguy hiểm
+    if (strongCount > 0) {
+      riskScore = 80;
+    } 
+    // RULE 3: MULTI-EVIDENCE (Kết hợp)
+    else if (medCount >= 2 || (medCount === 1 && weakCount >= 2)) {
+      riskScore = 65; 
     }
-  }
-
-  // ── 7.2 TÍNH RISK SCORE (base + corroboration) ────────────────────────────
-  const groupMax = { 'brand': 45, 'brand-path': 10, 'punycode': 15, 'form': 45, 'malware': 45,
-    'obfuscation': 14, 'external': 8, 'download': 32, 'vn-scam': 18, 'redirect': 35, 'misc': 8,
-    'domain': 18, 'reputation': 85, 'dns': 18, 'community': 35, 'content': 18, 'links': 24, 'permission': 16 };
-  const byGroup = {};
-  for (const f of findings) byGroup[f.group] = (byGroup[f.group] || 0) + f.points;
-  let baseRisk = 0;
-  for (const g in byGroup) baseRisk += Math.min(byGroup[g], groupMax[g] != null ? groupMax[g] : 25);
-
-  const has = (g) => (byGroup[g] || 0) > 0;
-  const hasBrand = has('brand') || has('brand-path');
-  const hasMalware = has('malware');
-  const hasObf = has('obfuscation') || has('external');
-  const hasVnScam = has('vn-scam');
-  const hasRedirect = has('redirect');
-  const hasLinks = has('links');
-  const hasPermission = has('permission');
-  const hasReputationDanger = has('reputation');
-  const hasContentScam = has('content');
-
-  const veryNew = domainAgeDays >= 0 && domainAgeDays < 7;
-  const young = domainAgeDays >= 0 && domainAgeDays < 30;
-  const noRep = !rep.inWhitelist && !rep.isOfficialBrand;
-
-  let bonus = 0;
-  const reasons = [];
-
-  // Password Risk Context: password + (brand spoof | new domain + no rep) mới nguy hiểm
-  if (dom.passwordField || dom.otpField) {
-    if (hasBrand) {
-      bonus += 25;
-      reasons.push(matchedBrand
-        ? `Trang yêu cầu nhập mật khẩu/OTP và có dấu hiệu giả mạo thương hiệu ${matchedBrand}.`
-        : 'Trang yêu cầu nhập mật khẩu/OTP và có dấu hiệu giả mạo thương hiệu.');
-    } else if (veryNew && noRep) {
-      bonus += 12;
-      reasons.push('Tên miền mới đăng ký yêu cầu nhập mật khẩu/OTP mà chưa có uy tín.');
+    // RULE 4: Ngữ cảnh nhạy cảm (Đăng nhập) nhưng ít evidence
+    else if (context.isLoginPortal && medCount === 1) {
+      riskScore = 55;
     }
-    // password/otp đơn lẻ trên site cũ/uy tín → KHÔNG cộng (bình thường)
-  }
-  if (dom.formHijack && dom.passwordField) { bonus += 15; }
-  if (hasBrand && young) { bonus += 18; reasons.push('Tên miền vừa mới đăng ký lại có dấu hiệu giả mạo thương hiệu.'); }
-  if (hasObf && (dom.passwordField || dom.otpField)) { bonus += 14; reasons.push('Trang vừa yêu cầu nhập mật khẩu vừa dùng mã bị làm rối.'); }
-  if (hasMalware && (dom.passwordField || hasBrand || young)) { bonus += 16; reasons.push('Trang có dấu hiệu mã độc đi kèm các yếu tố đáng ngờ khác.'); }
-  if (hasVnScam && (dom.passwordField || dom.otpField)) { bonus += 15; reasons.push('URL chứa từ khoá "xác minh/định danh/OTP" và trang yêu cầu nhập thông tin nhạy cảm.'); }
-  if (hasRedirect && hasBrand) { bonus += 15; reasons.push('Chuỗi chuyển hướng phức tạp kết hợp giả mạo thương hiệu.'); }
-  if (hasLinks && (hasBrand || hasRedirect || veryNew)) { bonus += 10; reasons.push('Trang chứa liên kết đáng ngờ đi kèm các tín hiệu rủi ro khác.'); }
-  if (hasPermission && (hasBrand || dom.sensitiveForm || veryNew)) { bonus += 10; reasons.push('Trang yêu cầu quyền nhạy cảm trong ngữ cảnh đáng ngờ.'); }
-  if (hasContentScam && (veryNew || hasBrand || dom.sensitiveForm)) { bonus += 12; reasons.push('Nội dung kêu gọi lợi nhuận/nhận thưởng đi kèm dấu hiệu đáng ngờ khác.'); }
-  if (hasReputationDanger) { bonus += 10; reasons.push('URL hoặc tên miền bị nguồn uy tín cảnh báo nguy hiểm.'); }
-
-  let riskScore = Math.min(100, Math.round(baseRisk + bonus));
-
-  // Nếu corroboration tạo bonus nhưng không có finding cụ thể → thêm contextual finding
-  // (để summary và badge có thể hiển thị đúng)
-  if (bonus > 0 && findings.length === 0 && reasons.length > 0) {
-    findings.push({ key: 'ContextRisk', label: reasons[0], points: bonus, group: 'context', decays: true });
-  }
-
-  // WebSocket: chỉ tăng nhẹ khi đã có rủi ro khác
-  if (dom.websocket && riskScore >= 20) riskScore = Math.min(100, riskScore + 5);
-
-  // ── 7.3 RISK DECAY — rủi ro "mềm" giảm dần nếu trang ổn định lâu ──────────
-  if (stabilityMs > 20000 && riskScore > 0 && !rep.inBlacklist) {
-    const softRisk = findings.filter(f => f.decays).reduce((s, f) => s + f.points, 0);
-    const hardRisk = riskScore - Math.min(softRisk, 25);
-    const decay = Math.max(0.5, 1 - stabilityMs / 240000); // sau 4 phút ổn định → giảm nửa phần mềm
-    riskScore = Math.round(hardRisk + Math.min(softRisk, 25) * decay);
-    riskScore = Math.max(hardRisk, riskScore);
-  }
-
-  // ── 7.4 TRUST SCORE ───────────────────────────────────────────────────────
-  let trustScore = 0;
-  const trustBadges = [];
-  if (domainAgeDays >= 0) {
-    if (domainAgeDays > 730) { trustScore += 38; trustBadges.push({ key: 'EstablishedDomain', label: 'Website đã tồn tại nhiều năm.' }); }
-    else if (domainAgeDays > 365) { trustScore += 30; trustBadges.push({ key: 'EstablishedDomain', label: 'Website đã tồn tại nhiều năm.' }); }
-    else if (domainAgeDays > 90) { trustScore += 18; trustBadges.push({ key: 'EstablishedDomain', label: 'Tên miền đã hoạt động vài tháng.' }); }
-    else if (domainAgeDays > 30) { trustScore += 8; }
-  }
-  if (rep.inWhitelist) { trustScore += 20; trustBadges.push({ key: 'ReputationVerified', label: 'Website nằm trong danh sách tin cậy.' }); }
-  if (rep.isOfficialBrand) { trustScore += 15; trustBadges.push({ key: 'OfficialBrand', label: 'Tên miền chính thức của thương hiệu lớn.' }); }
-  if (/^https:/.test(urlString || '')) { trustScore += 3; trustBadges.push({ key: 'SSL', label: 'Website sử dụng kết nối HTTPS.' }); }
-  if (rep.trustedCdnOnly !== false && dom.scanned && !dom.suspiciousExternalScript) {
-    trustBadges.push({ key: 'TrustedResources', label: 'Tài nguyên đến từ nguồn phổ biến.' });
-  }
-  if (dom.scanned && !dom.sensitiveForm && !dom.passwordField && !dom.otpField && !dom.formHijack) {
-    trustBadges.push({ key: 'NoPhishingForm', label: 'Không phát hiện biểu mẫu đánh cắp thông tin.' });
-  }
-  trustScore = Math.min(trustScore, 45);
-
-  // Blacklist → rủi ro cực mạnh, phủ quyết trust
-  if (rep.inBlacklist) { riskScore = Math.max(riskScore, 90); trustScore = 0; }
-
-  // ── CLEAN PAGE TRUST ───────────────────────────────────────────────────────
-  // Nếu đã quét DOM mà không thấy risk thì không nên kẹt quanh 50 chỉ vì homepage ít chữ.
-  // contentRich vẫn tăng confidence, nhưng không còn là điều kiện bắt buộc để cộng trust nền.
-  // Bonus này chỉ áp dụng cho Live Scan (content script thật) — không áp dụng cho fetchBased
-  if (!rep.inBlacklist && dom.scanned && !dom.fetchBased && trustScore < 32) {
-    if (riskScore === 0) {
-      trustScore = Math.max(trustScore, 32); // trang đã quét sạch → tối thiểu ~80+
-    } else if (riskScore < 8) {
-      trustScore = Math.max(trustScore, 24);
+    else if (medCount === 1 || weakCount >= 2) {
+      riskScore = 35;
     }
-  }
+    else if (weakCount === 1) {
+      riskScore = 15;
+    }
 
-  // ── 7.5 CONFIDENCE ────────────────────────────────────────────────────────
-  let confidence = 0;
-  if (domainAgeDays >= 0) confidence += 30;
-  if (rep.checked) confidence += 25;
-  if (dom.scanned && !dom.fetchBased) confidence += 25;  // Live scan: full DOM signal
-  else if (dom.scanned && dom.fetchBased && dom.contentRich) confidence += 15;  // Static fetch với content thật
-  // fetchBased + !contentRich = trang bị Cloudflare chặn → không có dữ liệu thật → không tăng confidence
-  if (redirectChain.length > 0) confidence += 10;
-  if (dom.contentRich && !dom.fetchBased) confidence += 10;  // Chỉ count contentRich nếu là live scan
-  else if (dom.contentRich && dom.fetchBased) confidence += 5;  // fetchBased contentRich vẫn count nhưng ít hơn
-  confidence = Math.min(confidence, 100);
-  if (rep.inWhitelist || rep.isOfficialBrand) confidence = Math.max(confidence, 80);
+    // SUPPRESSION (Ức chế Risk bằng Trust)
+    if (isHighTrust && riskScore < 80) {
+      // Nếu Trust cao và không có bằng chứng Strong, ép riskScore xuống rất thấp để tránh False Positive
+      riskScore = Math.min(riskScore, 10);
+    }
 
-  // ── 7.6 FINAL SCORE ───────────────────────────────────────────────────────
-  let finalScore = Math.round(Math.max(0, Math.min(100, 50 + trustScore - riskScore)));
-  if (rep.inBlacklist || (rep.malware && rep.malware.dangerous)) finalScore = Math.min(finalScore, 10);
-  const hasHighImpactRisk = findings.some(f => f.points >= 12 && (f.tier === 'A' || f.tier === 'B'));
-  // Trust-context boost CHỈ áp dụng khi không phải fetchBased (không có DOM thật)
-  // hoặc khi fetchBased nhưng contentRich (có HTML thực sự)
-  const allowTrustBoost = !dom.fetchBased || dom.contentRich;
-  if (allowTrustBoost && !confirmedDanger && trustContext === 'HIGH_TRUST' && !hasHighImpactRisk) finalScore = Math.max(finalScore, 90);
-  if (allowTrustBoost && !confirmedDanger && trustContext === 'MEDIUM_TRUST' && domainAgeDays > 365 && /^https:/i.test(urlString || '') && riskScore < 12) finalScore = Math.max(finalScore, 85);
-  if (allowTrustBoost && !confirmedDanger && trustContext === 'LOW_TRUST' && !hasHighImpactRisk && riskScore <= 15 && /^https:/i.test(urlString || '')) finalScore = Math.max(finalScore, 55);
+    // FINAL DECISION
+    let isPhish = false;
+    let riskLevel = 'safe';
+    let summary = 'Website an toàn, không phát hiện rủi ro mã độc hay giả mạo.';
 
-  // ── PHISHING HARD CAP (Ngăn chặn false-positive cho trang lừa đảo rõ ràng) ──
-  // Nếu phát hiện giả mạo thương hiệu + có ô nhập mật khẩu → ép điểm xuống vùng nguy hiểm
-  if (dom.brandInContent && dom.passwordField && !rep.isOfficialBrand) {
-    finalScore = Math.min(finalScore, 35);
-  }
-  // Nếu form POST ra ngoài (formHijack) + giả mạo thương hiệu → rất nguy hiểm
-  if (dom.formHijack && dom.brandInContent && !rep.isOfficialBrand) {
-    finalScore = Math.min(finalScore, 20);
-  }
-  const isUnknown = confidence < 45;
-  // Unknown cap LINH HOẠT theo mức rủi ro (không phải cứng 60 cho mọi trường hợp)
-  if (isUnknown) {
-    let cap;
-    if (riskScore === 0) cap = 75;        // sạch nhưng thiếu dữ liệu → điểm khá
-    else if (riskScore < 10) cap = 65;    // gần sạch
-    else if (riskScore < 20) cap = 55;    // có chút ngờ
-    else cap = 45;                         // có rủi ro + thiếu dữ liệu → thận trọng
-    if (finalScore > cap) finalScore = cap;
-    if (finalScore < 25) finalScore = 25;
-  }
-  const isPhish = finalScore <= 30;
+    if (riskScore >= 80) {
+      isPhish = true;
+      riskLevel = 'critical';
+      summary = 'Phát hiện bằng chứng lừa đảo hoặc nguy hiểm mã độc nghiêm trọng.';
+    } else if (riskScore >= 55) {
+      riskLevel = 'dangerous';
+      summary = 'Website có nhiều dấu hiệu đáng ngờ. Hãy cẩn thận khi nhập thông tin nhạy cảm.';
+    } else if (riskScore >= 35) {
+      riskLevel = 'suspicious';
+      summary = 'Website có một vài tín hiệu rủi ro, nhưng chưa đủ bằng chứng kết luận lừa đảo.';
+    }
 
-  // ── 7.7 BADGES cho UI (result map: '-1' an toàn / '0' vàng / '1' đỏ) ─────
+    return { riskScore, isPhish, riskLevel, summary };
+  }
+}
+
+// ----------------------------------------------------------------------------
+// EXPORT COMPATIBILITY LAYER
+// ----------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
+// 4. COMPUTE SCORE — V5 PIPELINE ENTRY POINT
+// ═══════════════════════════════════════════════════════════════════════════
+const computeScore = (urlString, ctxObj = {}) => {
+  let urlObj;
+  try { urlObj = new URL(urlString); } catch (_) { urlObj = { hostname: '', protocol: 'http:' }; }
+
+  const registrableDomain = getRegistrableDomain(urlObj.hostname);
+  const domSignals  = ctxObj.dom        || {};
+  const rep         = ctxObj.reputation  || { checked: false };
+  const intelData   = ctxObj.intel       || {}; // identityProfile từ Backend /intel
+
+  // Normalize domainAge
+  let domainAgeDays = -1;
+  const da = ctxObj.domainAge || ctxObj.domainAgeDetails || ctxObj.domainAgeDays;
+  if (typeof da === 'number') domainAgeDays = da;
+  else if (da && typeof da === 'object') domainAgeDays = da.ageDays != null ? da.ageDays : -1;
+
+  // ── STAGE 1: IDENTITY ────────────────────────────────────────────────────
+  const identityProfile = IdentityEngine.buildProfile(urlObj, registrableDomain, intelData);
+
+  // ── STAGE 2: OWNERSHIP ───────────────────────────────────────────────────
+  const ownership = DomainRelationshipEngine.verifyOwnership(urlObj, identityProfile, domSignals);
+
+  // ── STAGE 3: CONTEXT ─────────────────────────────────────────────────────
+  const context = ContextEngine.classify(identityProfile, domSignals);
+
+  // ── STAGE 4: EVIDENCE ────────────────────────────────────────────────────
+  const evidence = EvidenceEngine.collect(urlObj, identityProfile, domSignals, context, ownership, rep, domainAgeDays);
+
+  // ── STAGE 5: TRUST ───────────────────────────────────────────────────────
+  const trustAnalysis = TrustEngine.analyze(identityProfile, context, ownership, rep, domainAgeDays);
+
+  // ── STAGE 6: DECISION ────────────────────────────────────────────────────
+  const decision = DecisionEngine.decide(evidence, trustAnalysis, context);
+
+  // ── FORMAT OUTPUT ─────────────────────────────────────────────────────────
+  let finalScore = Math.round(Math.max(0, Math.min(100, 50 + trustAnalysis.trustScore - decision.riskScore)));
+  if (decision.isPhish) finalScore = Math.min(finalScore, 30);
+
+  let confidence = domSignals.scanned ? 50 : 20;
+  if (rep.checked)      confidence += 20;
+  if (domainAgeDays >= 0) confidence += 20;
+  if (trustAnalysis.trustScore >= 50) confidence = Math.max(confidence, 80);
+  if (identityProfile.certValid) confidence = Math.max(confidence, 55);
+
   const result = {};
-  // Trust badges → xanh (-1)
-  for (const tb of trustBadges) result[tb.key] = '-1';
-  // Risk badges (V3: 4 cấp độ SAFE/NEUTRAL/SUSPICIOUS/DANGEROUS)
-  for (const f of findings) {
-    if (result[f.key] !== undefined) continue;
-    let value;
-    // Đỏ (DANGEROUS): bằng chứng mạnh
-    if (f.points >= 22 || (f.group === 'brand' && riskScore >= 35) || f.key === 'FormHijack' || f.key === 'MalwareReputation')
-      value = '1';
-    // Cam (SUSPICIOUS): đáng ngờ rõ ràng
-    else if (f.points >= 14 || (f.group === 'malware' && riskScore >= 25))
-      value = '2';
-    // Vàng (NEUTRAL): cần để ý
-    else if (f.points >= 7)
-      value = '0';
-    else
-      value = '0';
-    if ((f.points || 0) <= 2) value = '-1';
-    // yếu tố nhẹ đơn lẻ → an toàn khi không có corroboration
-    if (['NoHTTPS', 'AtSymbol', 'LongURL', 'SuspiciousTLD', 'IPHost'].includes(f.key) && riskScore < 22) value = '-1';
-    result[f.key] = value;
-  }
-  // 'Sensitive Form' — 4 cấp độ theo ngữ cảnh
-  if (dom.sensitiveForm) {
-    if (rep.inWhitelist || rep.isOfficialBrand) result['Sensitive Form'] = '-1';
-    else if (hasBrand || dom.formHijack) result['Sensitive Form'] = '1';       // đỏ
-    else if (veryNew && noRep) result['Sensitive Form'] = '2';              // cam
-    else result['Sensitive Form'] = '0';                                    // vàng — trung tính
-  }
-
-  // ── 7.8 SUMMARY + EXPLANATIONS (short, user-friendly) ─────────────
   const explanations = [];
-  const pushReason = (level, text, key) => {
-    if (!text) return;
-    const clean = text.replace(/\s+/g, ' ').trim().replace(/\.+$/, '.');
-    if (explanations.some(e => e.text === clean)) return;
-    explanations.push({ level, text: clean, key });
-  };
-  for (const tb of trustBadges) pushReason('safe', tb.label, tb.key);
-  const sortedFindings = findings.slice().sort((a, b) => b.points - a.points);
-  for (const f of sortedFindings) {
-    if ((f.points || 0) <= 2) continue;
-    const level = (f.points >= 22 || f.key === 'MalwareReputation') ? 'danger' : (f.points >= 14 ? 'suspicious' : 'warning');
-    pushReason(level, f.label, f.key);
-    if (explanations.filter(e => e.level !== 'safe').length >= 6) break;
-  }
+  evidence.forEach(e => {
+    if (e.severity === 'INFORMATIONAL') {
+      result[e.id] = '0';
+      return; // Không đưa vào chip nguy hiểm
+    }
+    let lvl = 'warning';
+    if (e.severity === 'CRITICAL' || e.severity === 'STRONG') { result[e.id] = '1'; lvl = 'danger'; }
+    else if (e.severity === 'MEDIUM') { result[e.id] = '2'; lvl = 'suspicious'; }
+    else { result[e.id] = '0'; }
+    explanations.push({ key: e.id, level: lvl, text: e.reason });
+  });
 
-  let summary;
-  const firstDanger = explanations.find(e => e.level === 'danger' || e.level === 'suspicious');
-  const firstSafe = explanations.find(e => e.level === 'safe');
-  if (isUnknown) {
-    summary = 'Chưa đủ dữ liệu để đánh giá chính xác độ tin cậy. Hãy thận trọng khi nhập thông tin.';
-  } else if (riskScore >= 55) {
-    summary = 'Nguy cơ lừa đảo hoặc mã độc cao. ' + (firstDanger ? firstDanger.text : 'Phát hiện nhiều dấu hiệu nguy hiểm.');
-  } else if (riskScore >= 30) {
-    summary = 'Website có dấu hiệu đáng ngờ. ' + (firstDanger ? firstDanger.text : 'Nên kiểm tra kỹ trước khi nhập thông tin.');
-  } else if (riskScore > 0 && firstDanger) {
-    summary = 'Website nhìn chung chưa có bằng chứng nguy hiểm mạnh, nhưng cần chú ý. ' + firstDanger.text;
-  } else if (firstSafe) {
-    summary = firstSafe.text;
-  } else {
-    summary = 'Không phát hiện dấu hiệu giả mạo, mã độc hoặc thu thập dữ liệu nhạy cảm.';
-  }
+  trustAnalysis.sources.forEach(src => {
+    result[src] = '-1';
+    explanations.push({ key: src, level: 'safe', text: 'Tín hiệu tin cậy' });
+  });
 
-  const riskLevel = finalScore <= 20 ? 'critical' : finalScore <= 35 ? 'dangerous' :
-    finalScore <= 55 ? 'suspicious' : finalScore <= 75 ? 'caution' : 'safe';
+  // Backward compat chip aliases
+  if (result['NEW_DOMAIN']) result['NewDomain'] = '2';
+  if (result['NO_HTTPS'])   result['NoHTTPS']   = '2';
+  else                      result['SSL']        = '-1';
 
   return {
-    finalScore, trustScore, riskScore, confidence, isUnknown, isPhish,
-    summary, result, findings, explanations, domainAge: domainAgeInfo,
-    matchedBrand, riskLevel, redirectHops: rc.hops, trustContext,
+    finalScore,
+    trustScore:   trustAnalysis.trustScore,
+    riskScore:    decision.riskScore,
+    confidence,
+    isUnknown:    confidence < 45,
+    isPhish:      decision.isPhish,
+    riskLevel:    decision.riskLevel,
+    summary:      decision.summary,
+    result,
+    findings:     evidence,
+    explanations,
+    stage:        'LIVE',
+    ownershipStatus:    ownership.ownershipStatus,
+    ownershipConfidence: ownership.ownershipConfidence,
+    matchedBrand: ownership.brandDetected,
+    identityProfile,
   };
 };
 
+
+
+
+
+
+// Backward compatible analyzeUrl
+const analyzeUrl = (urlString) => {
+  let urlObj;
+  try { urlObj = new URL(urlString); } catch (_) { return { findings: [] }; }
+  // We don't have Layer4 anymore, so just return empty for old calls
+  return { findings: [], matchedBrand: null };
+};
+
+const analyzeRedirectChain = (chain) => {
+  return { points: 0, hops: chain ? chain.length - 1 : 0, distinctDomains: 0, label: null, openRedirects: [] }; // Mock for compat
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
-// 8. COMPAT — wrappers giữ tương thích với caller cũ
+// 5. COMPAT & EXPORTS
 // ═══════════════════════════════════════════════════════════════════════════
 const assessRisk = (urlString, domSignals = {}, domainAgeDays = -1) => {
   const r = computeScore(urlString, { dom: domSignals || {}, domainAgeDays });
@@ -924,62 +795,24 @@ const assessRisk = (urlString, domSignals = {}, domainAgeDays = -1) => {
     summary: r.summary, matchedBrand: r.matchedBrand,
   };
 };
+
 const computeHeuristicScore = (urlString) => {
   const r = computeScore(urlString, {});
   return { score: r.riskScore, flags: [], riskLevel: r.riskLevel };
 };
 
-// ─── Quick / Live scan variants ────────────────────────────────────────────
-
 const buildQuickScanSummary = (assessment) => {
-  const { riskScore, isUnknown, findings } = assessment;
-  const hasCritical = (findings || []).some(f =>
-    ['MalwareReputation','CommunityReport','Homograph','Typosquat','BrandInDomain',
-     'FormHijack','DangerousDownload','OpenRedirect'].includes(f.key)
-  );
-  if (hasCritical || riskScore >= 55) {
-    const firstDanger = (findings || []).slice().sort((a,b)=>b.points-a.points).find(f => f.points >= 14);
-    return `Phát hiện nguy cơ rõ ràng từ phân tích URL/domain. ${ firstDanger ? firstDanger.label : 'Hãy thận trọng.' }`;
-  }
-  if (riskScore >= 30) return `Có dấu hiệu đáng ngờ từ phân tích sơ bộ. Chưa phân tích hành vi thực tế của website.`;
-  if (isUnknown) return `Chưa đủ dữ liệu để đánh giá. Đây là phân tích sơ bộ — chưa kiểm tra JavaScript và hành vi website.`;
-  return `Chưa phát hiện nguy cơ rõ ràng từ URL và domain. Đây là đánh giá sơ bộ — chưa phân tích hành vi thực tế của website.`;
+  if (assessment.riskScore >= 80) return `Phát hiện nguy cơ lừa đảo. Thận trọng.`;
+  if (assessment.riskScore >= 55) return `Có dấu hiệu đáng ngờ từ URL.`;
+  return `Đánh giá sơ bộ an toàn.`;
 };
 
 const buildLiveScanSummary = (assessment) => assessment.summary;
 
-/**
- * Quick Scan — Static Analysis only (Custom URL Scan, fetch-based, no real tab)
- * Confidence capped at 50% — no real DOM/behavior signals.
- */
-const computeQuickScore = (urlString, ctx = {}) => {
-  const result = computeScore(urlString, ctx);
-  return {
-    ...result,
-    stage: 'QUICK',
-    confidence: Math.min(result.confidence, 50),
-    summary: buildQuickScanSummary(result),
-  };
-};
-
-/**
- * Live Scan — Dynamic Analysis (user visits a real tab, content script injected)
- * Full confidence, more accurate summary.
- */
-const computeLiveScore = (urlString, ctx = {}) => {
-  const result = computeScore(urlString, ctx);
-  return {
-    ...result,
-    stage: 'LIVE',
-    summary: buildLiveScanSummary(result),
-  };
-};
-
-// Exports
 if (typeof self !== 'undefined') {
   self.computeScore = computeScore;
-  self.computeQuickScore = computeQuickScore;
-  self.computeLiveScore = computeLiveScore;
+  self.computeQuickScore = (url, ctx) => computeScore(url, ctx);
+  self.computeLiveScore = (url, ctx) => computeScore(url, ctx);
   self.buildQuickScanSummary = buildQuickScanSummary;
   self.buildLiveScanSummary = buildLiveScanSummary;
   self.analyzeUrl = analyzeUrl;
@@ -995,9 +828,9 @@ if (typeof self !== 'undefined') {
   self.jaroWinkler = jaroWinkler;
   self.toUnicodeDomain = toUnicodeDomain;
 }
-if (typeof window !== 'undefined') {
-  window.computeScore = computeScore;
-  window.isTrustedHost = isTrustedHost;
-  window.getRegistrableDomain = getRegistrableDomain;
-  window.isOfficialBrandDomain = isOfficialBrandDomain;
-}
+
+export {
+  computeScore, analyzeUrl, assessRisk, computeHeuristicScore, isTrustedHost,
+  isOfficialBrandDomain, getRegistrableDomain, REPUTATION_WHITELIST, BRANDS,
+  levenshtein, jaroWinkler, toUnicodeDomain
+};
