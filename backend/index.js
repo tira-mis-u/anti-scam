@@ -18,6 +18,16 @@ const dns = require('dns').promises;
 const crypto = require('crypto');
 const querystring = require('querystring');
 
+// ─── New modular services ────────────────────────────────────────────────────
+const { logger: appLogger } = require('./src/utils/Logger');
+const { validateReportPayload: validateReportPayloadNew, escapeHtml } = require('./src/utils/Validation');
+const { storageProvider } = require('./src/services/StorageProvider');
+const reportRepository = require('./src/repositories/ReportRepository');
+const reportServiceNew = require('./src/services/ReportService');
+const { scanIdentityProfile } = require('./src/utils/IdentityScanner');
+// ─────────────────────────────────────────────────────────────────────────────
+
+
 
 var refreshTokens = [];
 const APP_VERSION = process.env.APP_VERSION || config.get("app.version");
@@ -214,9 +224,9 @@ const checkThreatFox = async (domain) => withTimeout((async () => {
     const resp = await axios.post('https://threatfox-api.abuse.ch/api/v1/', { query: 'search_ioc', search_term: domain }, { headers, timeout: 5500 });
     return { source: 'ThreatFox', dangerous: resp.data && resp.data.query_status === 'ok', status: resp.data && resp.data.query_status };
 })(), 6500, null);
-const resolveIp = async (domain) => {
+const resolveIp = async (domain) => withTimeout((async () => {
     try { const r = await dns.lookup(domain); return r && r.address; } catch (_) { return null; }
-};
+})(), 3000, null);
 const checkAbuseIPDB = async (ip) => {
     const key = process.env.ABUSEIPDB_API_KEY;
     if (!key || !ip) return null;
@@ -269,6 +279,13 @@ const REPORT_CATEGORIES = new Set([
     'fake_store',
     'spam',
     'suspicious_website',
+    'official_brand',
+    'bank_finance',
+    'e_commerce',
+    'social_media',
+    'payment_gateway',
+    'educational',
+    'trusted_service',
     'other'
 ]);
 
@@ -328,7 +345,7 @@ const validateReportPayload = (body) => {
     if (!domain || domain !== normalizeHostname(parsed.hostname)) return { error: 'URL không hợp lệ.' };
 
     const category = String(body.category || '').trim();
-    if (!REPORT_CATEGORIES.has(category)) return { error: 'Vui lòng chọn loại báo cáo.' };
+    if (!REPORT_CATEGORIES.has(category) && !category.startsWith('other:')) return { error: 'Vui lòng chọn loại báo cáo.' };
 
     const description = String(body.description || '').trim();
     if (description.length < 20) return { error: 'Mô tả phải có tối thiểu 20 ký tự.' };
@@ -354,7 +371,7 @@ const validateAdminReportPayload = (body) => {
     }
 
     const category = String(body.category || '').trim();
-    if (!REPORT_CATEGORIES.has(category)) return { error: 'Vui lòng chọn loại báo cáo.' };
+    if (!REPORT_CATEGORIES.has(category) && !category.startsWith('other:')) return { error: 'Vui lòng chọn loại báo cáo.' };
 
     const description = String(body.description || '').trim();
     if (description.length < 5) return { error: 'Mô tả phải có tối thiểu 5 ký tự.' };
@@ -792,11 +809,12 @@ app.get(`/${APP_VERSION}/intel`, async function(req, res) {
         const domain = normalizeHostname(String(rawUrl));
         if (!domain) return res.sendStatus(status.BAD_REQUEST);
         const ip = await resolveIp(domain);
-        const [domainAge, malware, dnsIntel, community] = await Promise.all([
+        const [domainAge, malware, dnsIntel, community, identityProfile] = await Promise.all([
             getDomainAgeRdap(domain),
             checkMalwareReputation(url, domain, ip),
             getDnsIntel(domain, ip),
-            getCommunityReportSummary(domain)
+            getCommunityReportSummary(domain),
+            scanIdentityProfile(domain, ip)
         ]);
         res.status(status.OK).send({
             status: status.OK,
@@ -806,11 +824,12 @@ app.get(`/${APP_VERSION}/intel`, async function(req, res) {
             domainAge,
             malware,
             dns: dnsIntel,
-            community
+            community,
+            identityProfile
         });
     } catch (err) {
         console.log('intel error', err && err.message);
-        res.status(status.OK).send({ status: status.OK, version: APP_VERSION, requestedOn: new Date(), malware: { dangerous: false, sources: [] }, community: { reportCount: 0 } });
+        res.status(status.OK).send({ status: status.OK, version: APP_VERSION, requestedOn: new Date(), malware: { dangerous: false, sources: [] }, community: { reportCount: 0 }, identityProfile: null });
     }
 });
 
@@ -823,50 +842,51 @@ app.post('/api/report', reportLimiter, function(req, res, next) {
     });
 }, async function(req, res) {
     try {
-        const validated = validateReportPayload(req.body || {});
-        if (validated.error) return res.status(status.BAD_REQUEST).send({ message: validated.error });
-        if (!db) return res.status(status.SERVICE_UNAVAILABLE).send({ message: 'Không thể gửi báo cáo. Vui lòng thử lại.' });
+        // 1. Validate payload using the new Validation module
+        const validated = validateReportPayloadNew(req.body || {});
+        if (validated.error) {
+            appLogger.warn('/api/report', `Validation failed: ${validated.error}`);
+            return res.status(status.BAD_REQUEST).send({ message: validated.error });
+        }
+
+        if (!db) {
+            appLogger.error('/api/report', 'Database not available');
+            return res.status(status.SERVICE_UNAVAILABLE).send({ message: 'Dịch vụ tạm thời không khả dụng. Vui lòng thử lại sau.' });
+        }
 
         const ip = getClientIp(req);
-        const deviceFingerprint = buildDeviceFingerprint(req, ip);
-        const now = new Date();
-        const screenshotUrl = await saveReportScreenshot(req.file);
 
-        const report = {
-            url: validated.url,
-            domain: validated.domain,
-            category: validated.category,
-            description: validated.description,
-            screenshotUrl,
-            status: 'pending',
-            ip, // Lưu IP thực của người báo cáo
-            // Bỏ location để bảo vệ riêng tư
-            browserName: String(req.body.browserName || '').slice(0, 80),
-            userAgent: String(req.body.userAgent || req.headers['user-agent'] || '').slice(0, 500),
-            deviceFingerprint,
-            extensionVersion: String(req.body.extensionVersion || '').slice(0, 50),
-            browserLanguage: String(req.body.browserLanguage || '').slice(0, 40),
-            pageTitle: String(req.body.pageTitle || '').slice(0, 300),
-            clientTimestamp: req.body.timestamp ? new Date(req.body.timestamp) : null,
-            createdAt: now,
-            updatedAt: now
-        };
+        // 2. Delegate to ReportService (handles file upload + DB + rollback)
+        const { reportId, domain } = await reportServiceNew.saveReport({
+            validated,
+            file: req.file || null,
+            meta: req.body || {},
+            ip,
+            headers: req.headers
+        });
 
-        await db.collection('reports').insertOne(report);
-        res.status(status.OK).send({
+        appLogger.info('/api/report', `Success: reportId=${reportId} domain=${domain} ip=${ip}`);
+        return res.status(status.OK).send({
             status: status.OK,
             version: APP_VERSION,
             requestedOn: new Date(),
             message: 'Báo cáo đã được gửi thành công.',
-            reportId: report._id,
-            domain: report.domain
+            reportId,
+            domain
         });
     } catch (err) {
-        if (err && err.code === 11000) {
-            return res.status(status.CONFLICT).send({ message: 'Bạn đã gửi báo cáo cho tên miền này trước đó.' });
+        const errStatus = (err && err.statusCode) || status.INTERNAL_SERVER_ERROR;
+        const errMsg = (err && err.message) || 'Không thể gửi báo cáo. Vui lòng thử lại.';
+
+        if (errStatus === 409) {
+            return res.status(status.CONFLICT).send({ message: errMsg });
         }
-        console.log('report error', err && err.message);
-        res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể gửi báo cáo. Vui lòng thử lại.' });
+        if (errStatus === 400) {
+            return res.status(status.BAD_REQUEST).send({ message: errMsg });
+        }
+
+        appLogger.error('/api/report', 'Unhandled error in report route', err);
+        return res.status(status.INTERNAL_SERVER_ERROR).send({ message: 'Không thể gửi báo cáo. Vui lòng thử lại.' });
     }
 });
 
@@ -1742,6 +1762,9 @@ async function startServer() {
 
         db = mongoClient.db(getMongoDatabaseName());
         console.info('Connected to MongoDB database:', db.databaseName);
+
+        // Initialize new modular repository
+        reportRepository.init(db);
         for (const collectionName of ['reports', 'rating', 'blacklist', 'whitelist', 'pornlist', 'admin_users', 'admin_sessions', 'audit_logs']) {
             await ensureCollection(collectionName).catch(err => console.log(`${collectionName} collection error`, err && err.message));
         }

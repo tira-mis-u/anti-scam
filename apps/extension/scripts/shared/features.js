@@ -850,9 +850,12 @@
   var scheduleRescan = (ms = 1e3) => {
     if (_rescanTimer) clearTimeout(_rescanTimer);
     _rescanTimer = setTimeout(() => {
-      const { result, dom } = collect();
-      chrome.runtime.sendMessage({ type: "ANALYSIS_UPDATE", result, dom }).catch(() => {
-      });
+      if (!chrome.runtime?.id) return;
+      try {
+        const { result, dom } = collect();
+        chrome.runtime.sendMessage({ type: "ANALYSIS_UPDATE", result, dom }).catch(() => {
+        });
+      } catch (_) {}
     }, ms);
   };
   var observer = new MutationObserver((mutations) => {

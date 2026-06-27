@@ -1,6 +1,8 @@
 /*global chrome*/
 /*global $*/
-/*global featureTranslations, _levelFromValue, _labelForSignal, getReportDeviceId, hasReportedThisDomain, markAsReported, _createChip, _appendChipGroup */
+import { logger } from '../services/Logger.js';
+import { Validation } from '../services/Validation.js';
+import { renderUnifiedChips, getReportDeviceId, hasReportedThisDomain, markAsReported } from './ui_commons.js';
 let message = {};
 
 document.getElementById('allow').addEventListener('click', () => {
@@ -80,11 +82,8 @@ try {
 } catch (e) { console.error(e); }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Community Report Logic (Replicated from plugin_ui.js)
+// Community Report Logic
 // ─────────────────────────────────────────────────────────────────────────────
-const REPORT_API_URL = 'https://anti-scam-6iix.onrender.com/api/report';
-const REPORT_MAX_FILE_SIZE = 5 * 1024 * 1024;
-const REPORT_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
 
 const reportToggle = document.getElementById('reportToggle');
 const reportForm = document.getElementById('community_report');
@@ -145,30 +144,22 @@ const getBrowserName = () => {
   return 'Không xác định';
 };
 
-const buildReportFormData = async () => {
-  const formData = new FormData();
-  formData.append('url', message.site);
-  const domain = (new URL(message.site)).hostname.replace(/^www\./i, '');
-  formData.append('domain', domain);
-  formData.append('timestamp', new Date().toISOString());
-  formData.append('browserName', getBrowserName());
-  formData.append('deviceId', await getReportDeviceId());
-  
-  let category = reportCategory.value;
-  if (category === 'other') {
-    category = `other: ${(document.getElementById('reportCategoryOther')?.value || '').trim()}`;
-  }
-  formData.append('category', category);
-  formData.append('description', (reportDescription.value || '').trim());
-
-  if (selectedReportFile) formData.append('screenshot', selectedReportFile, selectedReportFile.name);
-  return formData;
+const getLocationFromGPSAsync = () => {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) { resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 5000, maximumAge: 300000 }
+    );
+  });
 };
 
 if (reportToggle) {
   reportToggle.addEventListener('click', () => {
     $(reportForm).slideToggle();
     updateReportTargetInfo();
+    if (navigator.geolocation) { navigator.geolocation.getCurrentPosition(()=>{}, ()=>{}, {timeout: 5000}); }
   });
 }
 
@@ -198,6 +189,9 @@ if (reportDescription && reportDescriptionCount) {
   });
 }
 
+const REPORT_MAX_FILE_SIZE = 5 * 1024 * 1024;
+const REPORT_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+
 if (reportScreenshot) {
   reportScreenshot.addEventListener('change', () => {
     const file = reportScreenshot.files[0];
@@ -221,28 +215,68 @@ if (reportRemoveImage) reportRemoveImage.addEventListener('click', resetReportIm
 
 if (sendReport) {
   sendReport.addEventListener('click', async () => {
-    const domain = (new URL(message.site)).hostname.replace(/^www\./i, '');
-    if (await hasReportedThisDomain(domain)) {
-      setReportStatus('Bạn đã gửi báo cáo cho trang web này rồi.', 'error');
-      return;
-    }
-    if (!reportCategory.value || reportDescription.value.length < 20) {
-      setReportStatus('Vui lòng chọn loại và nhập mô tả chi tiết (min 20 ký tự).', 'error');
-      return;
-    }
-    setReportStatus('Đang gửi báo cáo...', 'loading');
+    let domain;
     try {
-      const res = await fetch(REPORT_API_URL, { method: 'POST', body: await buildReportFormData() });
-      if (res.ok) {
-        await markAsReported(domain);
-        setReportStatus('Gửi báo cáo thành công!', 'success');
-        setTimeout(() => { $(reportForm).slideUp(); resetReportForm(); }, 2000);
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setReportStatus(data.message || 'Lỗi khi gửi báo cáo.', 'error');
-      }
+      domain = (new URL(message.site)).hostname.replace(/^www\./i, '');
+    } catch (_) {
+      setReportStatus('URL trang báo cáo không hợp lệ.', 'error');
+      return;
+    }
+
+    if (await hasReportedThisDomain(domain)) {
+      setReportStatus('Bạn đã báo cáo website này trước đó.', 'error');
+      return;
+    }
+
+    let category = reportCategory.value;
+    if (category === 'other') {
+      category = `other: ${(document.getElementById('reportCategoryOther')?.value || '').trim()}`;
+    }
+
+    const payload = {
+      url: message.site,
+      domain: domain,
+      pageTitle: document.title || '',
+      category,
+      description: (reportDescription ? reportDescription.value : '').trim(),
+      screenshotBase64: reportImagePreview ? reportImagePreview.src : null,
+      screenshotName: selectedReportFile ? selectedReportFile.name : null,
+      browserName: getBrowserName(),
+      browserLanguage: navigator.language || '',
+      userAgent: navigator.userAgent || ''
+    };
+
+    const errorMsg = Validation.validate(payload);
+    if (errorMsg) { setReportStatus(errorMsg, 'error'); return; }
+
+    setReportStatus('Đang gửi báo cáo...', 'loading');
+    sendReport.disabled = true;
+
+    try {
+      const gps = await Promise.race([
+        getLocationFromGPSAsync(),
+        new Promise(resolve => setTimeout(() => resolve(null), 1000))
+      ]);
+      payload.gps = gps;
+
+      chrome.runtime.sendMessage({ action: 'SEND_REPORT', payload }, (response) => {
+        sendReport.disabled = false;
+        if (chrome.runtime.lastError || !response) {
+          setReportStatus('Lỗi kết nối với background service. Vui lòng thử lại.', 'error');
+          return;
+        }
+
+        if (response.success) {
+          markAsReported(domain);
+          setReportStatus('Gửi báo cáo thành công!', 'success');
+          setTimeout(() => { $(reportForm).slideUp(); resetReportForm(); }, 2000);
+        } else {
+          setReportStatus(response.error || 'Lỗi khi gửi báo cáo.', 'error');
+        }
+      });
     } catch (e) {
-      setReportStatus('Không thể kết nối máy chủ.', 'error');
+      sendReport.disabled = false;
+      setReportStatus('Lỗi không xác định.', 'error');
     }
   });
 }
@@ -253,3 +287,9 @@ if (reportCancel) {
     resetReportForm();
   });
 }
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.action === 'REPORT_PROGRESS') {
+    setReportStatus(`Đang gửi báo cáo... ${msg.percent}%`, 'loading');
+  }
+});

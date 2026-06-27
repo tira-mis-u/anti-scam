@@ -133,6 +133,7 @@ button {
   border-color: rgba(37, 99, 235, 0.55);
 }
 #themeToggle:checked + .theme-slider .theme-icon-light { color: #fff7ed; }
+#themeToggle:checked + .theme-slider .theme-icon-dark { color: #3b82f6; }
 
 h6 {
   font-size: 1rem;
@@ -1113,4 +1114,26 @@ select option, select optgroup option {
   background: rgba(21, 128, 61, 0.1);
   color: #15803d;
   border-color: rgba(21, 128, 61, 0.3);
+}
+
+/* V5 Ownership Status Badge */
+.badge-ownership-verified {
+  background: rgba(34, 197, 94, 0.18);
+  color: #16a34a;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+}
+.badge-ownership-mismatch {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+:root[data-theme="light"] .badge-ownership-verified {
+  background: rgba(21, 128, 61, 0.1);
+  color: #15803d;
+  border-color: rgba(21, 128, 61, 0.3);
+}
+:root[data-theme="light"] .badge-ownership-mismatch {
+  background: rgba(185, 28, 28, 0.08);
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.25);
 }

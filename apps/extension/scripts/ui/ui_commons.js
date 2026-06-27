@@ -37,6 +37,34 @@ const featureTranslations = {
   'EstablishedDomain':'Hoạt động lâu năm','ReputationVerified':'Đã xác thực an toàn',
   'OfficialBrand':'Web chính chủ thương hiệu','SSL':'Chứng chỉ HTTPS hợp lệ',
   'TrustedResources':'Nguồn uy tín (CDN)','NoPhishingForm':'Không có biểu mẫu đánh cắp',
+
+  // V3/V4 Layer-based IDs (uppercase)
+  'BLACKLIST':'Nằm trong danh sách đen','MALWARE':'Bị cảnh báo mã độc',
+  'WHITELIST':'Tổ chức đáng tin cậy','OFFICIAL_BRAND':'Web chính chủ thương hiệu',
+  'GOV_EDU':'Trang web Chính phủ/Giáo dục', 'CLOUD_HOSTED':'Ứng dụng đám mây',
+  'COMMUNITY_REPORT':'Cộng đồng báo cáo vi phạm',
+  'AGE_OLD':'Hoạt động lâu năm','AGE_MATURE':'Tên miền đã ổn định',
+  'NO_HTTPS':'Không có bảo mật HTTPS','HTTPS':'Bảo mật HTTPS',
+  'NEW_DOMAIN_7':'Tên miền mới đăng ký (<7 ngày)','NEW_DOMAIN_14':'Tên miền mới đăng ký (<14 ngày)','NEW_DOMAIN_30':'Tên miền còn rất mới (<30 ngày)',
+  'RISKY_DNS':'Hạ tầng máy chủ rủi ro',
+  'PUNYCODE':'Tên miền giả mạo ký tự','HOMOGRAPH':'Giả mạo thương hiệu tinh vi',
+  'TYPOSQUAT':'Viết sai tên thương hiệu','BRAND_IN_DOMAIN':'Mượn danh thương hiệu lớn',
+  'BRAND_IMPERSONATION':'Mạo danh nội dung thương hiệu',
+  'IP_HOST':'Dùng địa chỉ IP trực tiếp','SUSPICIOUS_TLD':'Đuôi tên miền đáng ngờ',
+  'SCAM_KEYWORDS':'Từ khóa lừa đảo','SCAM_CONTENT':'Nội dung có dấu hiệu lừa đảo',
+  'DOUBLE_EXT':'File có đuôi kép đáng ngờ','EXE_DOWNLOAD':'Tệp thực thi đáng ngờ',
+  'FORM_HIJACK':'Biểu mẫu bị chiếm đoạt','SENSITIVE_FORM':'Yêu cầu mật khẩu/OTP',
+  'MALICIOUS_JS':'Theo dõi bàn phím/Clipboard','SUSPICIOUS_IFRAME':'Khung trang ẩn',
+  'REDIRECT_CHAIN':'Chuyển hướng qua nhiều tên miền',
+  // V5 Identity Engine signals
+  'CERT_VALID':'Chứng chỉ SSL/TLS hợp lệ',
+  'LOGIN_CONTEXT':'Trang yêu cầu đăng nhập',
+  'NEW_DOMAIN':'Tên miền mới đăng ký',
+  'NO_HTTPS':'Không có kết nối bảo mật HTTPS',
+  'IP_HOST':'Truy cập qua địa chỉ IP trực tiếp',
+  'DOUBLE_EXT':'Tệp có đuôi kép đáng ngờ (.pdf.exe)',
+  'CLOUD_HOSTED':'Ứng dụng nền tảng đám mây',
+  'CERT_VALID_TRUST':'Chứng chỉ SSL/TLS xác thực',
 };
 
 const _levelFromValue = (val) => val === '-1' ? 'safe' : (val === '1' ? 'danger' : (val === '2' ? 'suspicious' : 'warning'));
@@ -156,7 +184,25 @@ const semanticKeyMap = {
   'MalwareReputation':'malware-reputation', 'DNSRisk':'dns-risk', 'CommunityReport':'community-report',
   'DangerousDownload':'download-risk', 'ArchiveDownload':'download-risk', 'SuspiciousLinks':'link-risk', 'DeceptiveLinks':'link-risk',
   'PermissionAbuse':'permission-risk', 'OpenRedirect':'redirect-risk', 'RedirectBadHop':'redirect-risk',
-  'MetaRefreshRedirect':'redirect-risk', 'ScriptRedirect':'redirect-risk'
+  'MetaRefreshRedirect':'redirect-risk', 'ScriptRedirect':'redirect-risk',
+  // V5
+  'CERT_VALID':'ssl-cert', 'CERT_VALID_TRUST':'ssl-cert',
+  'LOGIN_CONTEXT':'login-context',
+  'NEW_DOMAIN':'domain-age-new',
+  'NO_HTTPS':'https',
+  'IP_HOST':'ip-host',
+  'DOUBLE_EXT':'download-risk',
+  'MALICIOUS_JS':'js-risk',
+  'FORM_HIJACK':'form-destination',
+  'BRAND_IMPERSONATION':'brand-spoof',
+  'SCAM_KEYWORDS':'scam-content',
+  'REDIRECT_CHAIN':'redirect-risk',
+  'BLACKLIST':'blacklist', 'MALWARE':'malware',
+  'OFFICIAL_BRAND':'official-domain',
+  'WHITELIST':'official-domain',
+  'GOV_EDU':'gov-edu',
+  'AGE_OLD':'domain-age-established', 'AGE_MATURE':'domain-age-established',
+  'CLOUD_HOSTED':'cloud-hosted',
 };
 
 const _canonicalKey = (key, text) => semanticKeyMap[key] || _normLabel(featureTranslations[key] || text || key);
@@ -211,7 +257,7 @@ const _collectFeatureChips = (state) => {
   return { chips, counts };
 };
 
-const renderUnifiedChips = (featureListEl, state) => {
+export const renderUnifiedChips = (featureListEl, state) => {
   if (!featureListEl) return;
   featureListEl.innerHTML = '';
   const { chips, counts } = _collectFeatureChips(state);
@@ -233,7 +279,7 @@ const renderUnifiedChips = (featureListEl, state) => {
 };
 
 // Device identification and reporting helpers
-const getReportDeviceId = async () => {
+export const getReportDeviceId = async () => {
   const key = 'antiScamReportDeviceId';
   try {
     const stored = await chrome.storage.local.get(key);
@@ -246,7 +292,7 @@ const getReportDeviceId = async () => {
   }
 };
 
-const hasReportedThisDomain = async (domain) => {
+export const hasReportedThisDomain = async (domain) => {
   const key = `reported_${domain}`;
   try {
     const stored = await chrome.storage.local.get(key);
@@ -254,7 +300,7 @@ const hasReportedThisDomain = async (domain) => {
   } catch (_) { return false; }
 };
 
-const markAsReported = async (domain) => {
+export const markAsReported = async (domain) => {
   const key = `reported_${domain}`;
   try {
     await chrome.storage.local.set({ [key]: true });

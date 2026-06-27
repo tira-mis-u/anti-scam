@@ -1,5 +1,8 @@
 /* global chrome */
 /* global $ */
+import { logger } from '../services/Logger.js';
+import { Validation } from '../services/Validation.js';
+import { renderUnifiedChips, getReportDeviceId, hasReportedThisDomain, markAsReported } from './ui_commons.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Màu sắc badge
@@ -13,9 +16,7 @@ let currentPageTitle = '';
 // ═══════════════════════════════════════════════════════════════════════════
 // LOGGING
 // ═══════════════════════════════════════════════════════════════════════════
-const _log = (tag, ...args) => {
-  console.log(`[${tag}]`, ...args);
-};
+const _log = (...args) => logger.info(...args);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // UNIFIED STATE — activeAnalysis LÀ SOURCE OF TRUTH DUY NHẤT
@@ -45,6 +46,10 @@ const activeAnalysis = {
   counts: null,              // Link/script/image/iframe/form counts
   domainAge: null,
   reputation: null,
+  // V5 Identity fields
+  ownershipStatus: null,     // 'VERIFIED' | 'MISMATCH' | 'UNKNOWN'
+  ownershipConfidence: null, // 'HIGH' | 'MEDIUM' | 'LOW'
+  matchedBrand: null,        // Tên thương hiệu khớp (nếu có)
 
   // ── Loading state ──
   loadingText: null,         // Text hiển thị khi đang loading
@@ -135,6 +140,10 @@ const resetAnalysisData = () => {
   activeAnalysis.loadingText = null;
   activeAnalysis.completedAt = null;
   activeAnalysis.stage = null;
+  // V5 Identity fields
+  activeAnalysis.ownershipStatus = null;
+  activeAnalysis.ownershipConfidence = null;
+  activeAnalysis.matchedBrand = null;
 };
 
 // Saved CURRENT_TAB analysis — khôi phục khi user nhấn Back
@@ -276,10 +285,10 @@ const renderResultState = () => {
   const phishH2 = document.querySelector('#isPhishing h2');
   if (phishH2) phishH2.textContent = 'Website nguy hiểm';
 
-  if (isWhiteList) {
+  if (isWhiteList && activeAnalysis.source !== ScanSource.CUSTOM_URL) {
     $('#pluginBody').hide(); $('#isSafe').show(); $('#isSafe .site-url').text(domain); return;
   }
-  if (isBlocked) {
+  if (isBlocked && activeAnalysis.source !== ScanSource.CUSTOM_URL) {
     $('#pluginBody').hide(); $('#isPhishing').show(); $('#isPhishing .site-url').text(isBlocked); return;
   }
   if (status === 'SCAN_BLOCKED') {
@@ -496,6 +505,9 @@ chrome.tabs.query({ currentWindow: true, active: true }, ([tab]) => {
             counts: state.counts,
             domainAge: state.domainAge,
             reputation: state.reputation,
+            ownershipStatus: state.ownershipStatus || null,
+            ownershipConfidence: state.ownershipConfidence || null,
+            matchedBrand: state.matchedBrand || null,
             completedAt: Date.now(),
           });
         }
@@ -532,6 +544,9 @@ chrome.tabs.query({ currentWindow: true, active: true }, ([tab]) => {
         counts: state.counts,
         domainAge: state.domainAge,
         reputation: state.reputation,
+        ownershipStatus: state.ownershipStatus || null,
+        ownershipConfidence: state.ownershipConfidence || null,
+        matchedBrand: state.matchedBrand || null,
         completedAt: Date.now(),
       });
 
@@ -886,6 +901,9 @@ const startCustomUrlScan = (rawUrl) => {
           counts: state.counts,
           domainAge: state.domainAge,
           reputation: state.reputation,
+          ownershipStatus: state.ownershipStatus || null,
+          ownershipConfidence: state.ownershipConfidence || null,
+          matchedBrand: state.matchedBrand || null,
           completedAt: Date.now(),
           loadingText: null,
         });
@@ -1017,9 +1035,6 @@ if (backToCurrentTab) {
 // ═══════════════════════════════════════════════════════════════════════════
 // Community report UI
 // ═══════════════════════════════════════════════════════════════════════════
-const REPORT_API_URL = 'https://anti-scam-6iix.onrender.com/api/report';
-const REPORT_MAX_FILE_SIZE = 5 * 1024 * 1024;
-const REPORT_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
 
 const reportToggle = document.getElementById('reportToggle');
 const reportForm = document.getElementById('reportForm');
@@ -1084,71 +1099,15 @@ const getBrowserName = () => {
   return 'Không xác định';
 };
 
-let _cachedGpsLocation = null;
-let _gpsLocationError = null;
-
-const getLocationFromGPS = () => {
+const getLocationFromGPSAsync = () => {
   return new Promise((resolve) => {
-    if (_cachedGpsLocation) { resolve(_cachedGpsLocation); return; }
     if (!navigator.geolocation) { resolve(null); return; }
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        _cachedGpsLocation = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy, source: 'gps' };
-        resolve(_cachedGpsLocation);
-      },
-      () => { resolve(null); },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 300000 }
+      (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 5000, maximumAge: 300000 }
     );
   });
-};
-
-const validateReportForm = () => {
-  let parsedUrl = null;
-  try { parsedUrl = new URL(currentTabUrl); } catch (_) {}
-  if (!parsedUrl || !['http:', 'https:'].includes(parsedUrl.protocol)) return 'URL không hợp lệ.';
-  if (!reportCategory || !reportCategory.value) return 'Vui lòng chọn loại báo cáo.';
-  if (reportCategory.value === 'other') {
-    const otherVal = (document.getElementById('reportCategoryOther')?.value || '').trim();
-    if (otherVal.length < 3) return 'Vui lòng nhập lý do cụ thể (tối thiểu 3 ký tự).';
-  }
-  const description = (reportDescription && reportDescription.value || '').trim();
-  if (description.length < 20) return 'Mô tả phải có tối thiểu 20 ký tự.';
-  if (description.length > 1000) return 'Mô tả không được vượt quá 1000 ký tự.';
-  if (selectedReportFile && selectedReportFile.size > REPORT_MAX_FILE_SIZE) return 'File vượt quá 5MB.';
-  if (selectedReportFile && !REPORT_ALLOWED_TYPES.includes(selectedReportFile.type)) return 'Định dạng ảnh không được hỗ trợ.';
-  return '';
-};
-
-const buildReportFormData = async () => {
-  const manifest = chrome.runtime.getManifest ? chrome.runtime.getManifest() : {};
-  const formData = new FormData();
-  formData.append('url', currentTabUrl);
-  formData.append('domain', currentDomain);
-  formData.append('pageTitle', currentPageTitle || document.title || '');
-  formData.append('timestamp', new Date().toISOString());
-  formData.append('extensionVersion', manifest.version || '');
-  formData.append('browserName', getBrowserName());
-  formData.append('browserLanguage', navigator.language || '');
-  formData.append('userAgent', navigator.userAgent || '');
-  formData.append('deviceId', await getReportDeviceId());
-  let category = reportCategory.value;
-  if (category === 'other') {
-    const otherVal = (document.getElementById('reportCategoryOther')?.value || '').trim();
-    category = `other: ${otherVal}`;
-  }
-  formData.append('category', category);
-  formData.append('description', (reportDescription.value || '').trim());
-  const gpsLoc = await getLocationFromGPS();
-  if (gpsLoc) {
-    formData.append('latitude', String(gpsLoc.latitude));
-    formData.append('longitude', String(gpsLoc.longitude));
-    formData.append('gpsAccuracy', String(gpsLoc.accuracy));
-    formData.append('locationSource', 'gps');
-  } else {
-    formData.append('locationSource', 'ip-fallback');
-  }
-  if (selectedReportFile) formData.append('screenshot', selectedReportFile, selectedReportFile.name);
-  return formData;
 };
 
 if (reportToggle && reportForm) {
@@ -1201,6 +1160,9 @@ if (reportDescription && reportDescriptionCount) {
   });
 }
 
+const REPORT_MAX_FILE_SIZE = 5 * 1024 * 1024;
+const REPORT_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+
 if (reportScreenshot) {
   reportScreenshot.addEventListener('change', () => {
     setReportStatus('');
@@ -1224,22 +1186,68 @@ if (reportCancel) { reportCancel.addEventListener('click', () => { resetReportFo
 
 if (sendReport) {
   sendReport.addEventListener('click', async () => {
-    if (await hasReportedThisDomain(currentDomain)) { setReportStatus('Bạn đã gửi báo cáo cho trang web này rồi.', 'error'); return; }
-    const error = validateReportForm();
-    if (error) { setReportStatus(error, 'error'); return; }
+    if (await hasReportedThisDomain(currentDomain)) { setReportStatus('Bạn đã báo cáo website này trước đó.', 'error'); return; }
+
+    let category = reportCategory.value;
+    if (category === 'other') {
+      const otherVal = (document.getElementById('reportCategoryOther')?.value || '').trim();
+      category = `other: ${otherVal}`;
+    }
+
+    const payload = {
+      url: currentTabUrl,
+      domain: currentDomain,
+      pageTitle: currentPageTitle || document.title || '',
+      category,
+      description: (reportDescription.value || '').trim(),
+      file: selectedReportFile,
+      screenshotBase64: reportImagePreview ? reportImagePreview.src : null,
+      screenshotName: selectedReportFile ? selectedReportFile.name : null,
+      browserName: getBrowserName(),
+      browserLanguage: navigator.language || '',
+      userAgent: navigator.userAgent || ''
+    };
+
+    const errorMsg = Validation.validate(payload);
+    if (errorMsg) { setReportStatus(errorMsg, 'error'); return; }
+
     setReportStatus('Đang gửi báo cáo...', 'loading');
     sendReport.disabled = true;
+
     try {
-      const response = await fetch(REPORT_API_URL, { method: 'POST', body: await buildReportFormData() });
-      if (!response.ok) throw new Error('Network response was not ok');
-      await markAsReported(currentDomain);
-      resetReportForm();
-      setReportStatus('Báo cáo thành công.', 'success');
-      setTimeout(closeReportPanel, 1600);
-    } catch (_) {
-      setReportStatus('Không thể gửi báo cáo.', 'error');
-    } finally {
+      const gps = await Promise.race([
+        getLocationFromGPSAsync(),
+        new Promise(resolve => setTimeout(() => resolve(null), 1000))
+      ]);
+      payload.gps = gps;
+
+      delete payload.file;
+
+      chrome.runtime.sendMessage({ action: 'SEND_REPORT', payload }, (response) => {
+        sendReport.disabled = false;
+        if (chrome.runtime.lastError || !response) {
+          setReportStatus('Lỗi kết nối với background service. Vui lòng thử lại.', 'error');
+          return;
+        }
+
+        if (response.success) {
+          markAsReported(currentDomain);
+          resetReportForm();
+          setReportStatus('Báo cáo thành công.', 'success');
+          setTimeout(closeReportPanel, 1600);
+        } else {
+          setReportStatus(response.error || 'Không thể gửi báo cáo.', 'error');
+        }
+      });
+    } catch (err) {
       sendReport.disabled = false;
+      setReportStatus('Lỗi không xác định khi gửi báo cáo.', 'error');
     }
   });
 }
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.action === 'REPORT_PROGRESS') {
+    setReportStatus(`Đang gửi báo cáo... ${message.percent}%`, 'loading');
+  }
+});

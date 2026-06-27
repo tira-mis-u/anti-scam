@@ -1,8 +1,8 @@
 {
   "name": "AntiScam",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Bảo vệ bạn khỏi các trang web lừa đảo, mã độc và ăn cắp thông tin.",
-  "homepage_url": "https://antiscam.vn/",
+  "homepage_url": "https://tira-mis-u.github.io/anti-scam/",
   "permissions": [
     "tabs",
     "storage",
@@ -16,7 +16,8 @@
     "*://*/*"
   ],
   "background": {
-    "service_worker": "scripts/background/background.js"
+    "service_worker": "scripts/background/background.js",
+    "type": "module"
   },
   "action": {
     "default_popup": "pages/popup/index.html"
