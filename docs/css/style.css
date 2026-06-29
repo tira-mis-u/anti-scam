@@ -162,7 +162,7 @@ nav {
 .score-card.conf .value { color: var(--blue); }
 
 /* === FEATURES === */
-.features { padding: 100px 0; }
+.features { padding: 36px 0; }
 .section-label {
   text-align: center; font-size: 13px; font-weight: 700;
   text-transform: uppercase; letter-spacing: 2px;
@@ -205,7 +205,7 @@ nav {
 .feature-card p { font-size: 14px; color: var(--muted); line-height: 1.6; }
 
 /* === HOW IT WORKS === */
-.how-it-works { padding: 80px 0; }
+.how-it-works { padding: 36px 0; }
 .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 24px; }
 .step {
   text-align: center; padding: 32px 20px;
@@ -223,7 +223,7 @@ nav {
 .step p { font-size: 13px; color: var(--muted); line-height: 1.6; }
 
 /* === SIGNALS === */
-.signals { padding: 80px 0; }
+.signals { padding: 36px 0; }
 .signals-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
@@ -243,7 +243,7 @@ nav {
 .signal-item .sd { font-size: 12px; color: var(--muted); }
 
 /* === ABOUT US === */
-.about-us { padding: 100px 0; }
+.about-us { padding: 36px 0; }
 .about-card {
   background: var(--card);
   border: 1px solid var(--card-border);
